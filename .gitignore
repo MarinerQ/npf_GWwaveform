@@ -34,7 +34,7 @@ __pycache__/
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*.ipynb
+#*.ipynb
 notebooks/
 !jupyter/reproducibility/*.ipynb
 jupyter/reproducibility/* Old.ipynb

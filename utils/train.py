@@ -258,17 +258,17 @@ def train_models(
                 current_kwargs.update(models_kwargs.get(model_name, dict()))
 
                 trainer = NeuralNet(model, criterion, **current_kwargs)
-
-                if is_retrain:
+                trainer.initialize()
+                if is_retrain:  # ignore ckpt
                     _ = trainer.fit(data_train)
                     with open(
                         os.path.join(chckpnt_dirname, MOD_SUMM_FILENAME), "w"
                     ) as f:
                         f.write(str(trainer.module_))
-
+                else:
+                # if without if
                 # load in all case => even when training loads the best checkpoint
-                trainer.initialize()
-                trainer.load_params(checkpoint=chckpt)
+                    trainer.load_params(checkpoint=chckpt)
 
                 # return the training rather than testing history as dflt
                 history = deepcopy(trainer.history)
