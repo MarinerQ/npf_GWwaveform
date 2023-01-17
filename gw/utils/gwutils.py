@@ -46,7 +46,10 @@ def get_predictions(model, x_context, y_context, x_target, nsample, return_sampl
 
 def get_gwh5_nsample(gwh5file):
     with h5py.File(gwh5file, "r") as f:
-        l = len( list(f['time']) )
+        try:
+            l = len( list(f['time_stretched']) )
+        except:
+            l = len( list(f['time']) )
     return l
 
 
@@ -86,7 +89,107 @@ class GWDataset(Dataset):
         
         t = self.remove_nan(t)
         h = self.remove_nan(h)
-        
+
         t = rescale_range(t, (t.min(),t.max()), (-1,1))
+
         return torch.from_numpy(t).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
     
+
+
+
+class GWDatasetCut(Dataset):
+    def __init__(self, h5file, cut_fraction,
+                 root_dir=None, indcies=None):
+        """
+        Gravitational wave dataset. 
+        """
+        self.h5file = h5file
+        self.root_dir = root_dir
+        self.n_samples = get_gwh5_nsample(h5file)
+        if indcies is None:
+            indcies = np.arange(self.n_samples)
+            
+        with h5py.File(h5file, "r") as f:
+            self.time = np.array(list(f['time']))[indcies]
+            self.strain = np.array(list(f['strain']))[indcies]
+
+            self.source_parameter_names = np.array(list(f['source_parameters']))
+            self.source_parameters = {}
+            for name in self.source_parameter_names:
+                self.source_parameters[name] = np.array(list(f['source_parameters'][name]))[indcies]
+        
+        self.n_samples = len(self.time)
+        self.cut_fraction = cut_fraction
+        
+    def __len__(self):
+        return self.n_samples
+    
+    def remove_nan(self, array):
+        return array[~np.isnan(array)]
+    
+    def __getitem__(self, index):
+        t = self.time[index]
+        h = self.strain[index]
+        
+        t = self.remove_nan(t)
+        h = self.remove_nan(h)
+        ll=len(t)
+
+        cut1 = int(ll*self.cut_fraction[0])
+        cut2 = int(ll*self.cut_fraction[1])
+        # cut at both direction
+        t=t[cut1:-cut2]
+        h=h[cut1:-cut2]
+
+        t = rescale_range(t, (t.min(),t.max()), (-1,1))
+        return torch.from_numpy(t).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
+
+
+class GWDatasetCutStRe(Dataset):
+    def __init__(self, h5file, cut_fraction,
+                 root_dir=None, indcies=None):
+        """
+        Gravitational wave dataset. Waveforms are cut, stretched, and resampled.
+        """
+        self.h5file = h5file
+        self.root_dir = root_dir
+        self.n_samples = get_gwh5_nsample(h5file)
+        if indcies is None:
+            indcies = np.arange(self.n_samples)
+            
+        with h5py.File(h5file, "r") as f:
+            self.time_stretched = np.array(list(f['time_stretched']))[indcies]
+            self.strain_stretched = np.array(list(f['strain_stretched']))[indcies]
+            self.time_stretched_resampled = np.array(list(f['time_stretched_resampled']))[indcies]
+            self.strain_stretched_resampled = np.array(list(f['strain_stretched_resampled']))[indcies]
+
+            self.source_parameter_names = np.array(list(f['source_parameters']))
+            self.source_parameters = {}
+            for name in self.source_parameter_names:
+                self.source_parameters[name] = np.array(list(f['source_parameters'][name]))[indcies]
+        
+        self.n_samples = len(self.time_stretched)
+        self.cut_fraction = cut_fraction
+        
+    def __len__(self):
+        return self.n_samples
+    
+    def remove_nan(self, array):
+        return array[~np.isnan(array)]
+    
+    def __getitem__(self, index):
+        t = self.time_stretched_resampled[index]
+        h = self.strain_stretched_resampled[index]
+        
+        t = self.remove_nan(t)
+        h = self.remove_nan(h)
+        ll=len(t)
+
+        cut1 = int(ll*self.cut_fraction[0])
+        cut2 = int(ll*self.cut_fraction[1])
+        # cut at both direction
+        t=t[cut1:-cut2]
+        h=h[cut1:-cut2]
+
+        t = rescale_range(t, (t.min(),t.max()), (-1,1))
+        return torch.from_numpy(t).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
