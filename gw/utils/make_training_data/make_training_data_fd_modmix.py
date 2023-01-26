@@ -115,7 +115,7 @@ def recursively_load_dict_contents_from_group(h5file, path):
 def make_FDaligned_waveforms(injection_parameters,
         duration, f_lower,sampling_frequency,
         approximant_list=['IMRPhenomPv2','SEOBNRv4P'],
-        mode='plus'):
+        mode='plus',f_ref=50):
     ''' 
     Waveforms are aligned with the 1st model in approximant_list.
     '''
@@ -131,8 +131,12 @@ def make_FDaligned_waveforms(injection_parameters,
     
     if mode in ['plus', 'cross']:
         for i,approx in enumerate(approximant_list):
-            waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=50., minimum_frequency=20.)
+            if approx=='NRSur7dq4':
+                waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=0)  # 0: auto choose (still have bug here)
+            else:
+                waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=f_lower)
 
 
             waveform_generator = bilby.gw.WaveformGenerator(
@@ -159,8 +163,12 @@ def make_FDaligned_waveforms(injection_parameters,
     elif mode == 'both':
         # h_list = [approx1_plus, approx1_cross, approx2_plus, approx2_cross, ...]
         for i,approx in enumerate(approximant_list):
-            waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=50., minimum_frequency=20.)
+            if approx=='NRSur7dq4':
+                waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=0)  # 0: auto choose
+            else:
+                waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=f_lower)
 
 
             waveform_generator = bilby.gw.WaveformGenerator(
@@ -233,17 +241,25 @@ def unscale_scaled_fdwaveforms(farray_scaled, h_list_scaled, chirp_mass):
     return farray, h_list_unscaled
 
 def resample_scaled_fdwaveforms(farray_scaled, h_list_scaled):
-    farray_scaled = farray_scaled[::-1]
-    for i,h in enumerate(h_list_scaled):
-        h_list_scaled[i] = h[::-1]
+    farray_scaled_new = farray_scaled[::-1]
+    h_list_scaled_new = []
     
-    fs_min = min(farray_scaled)
-    fs_max = max(farray_scaled)
-    new_fs = np.linspace(fs_min, fs_max, len(farray_scaled)//10) # downsample
+    for i,h in enumerate(h_list_scaled):
+        h_list_scaled_new.append(h[::-1])
+    
+    fs_min = min(farray_scaled_new)
+    fs_max = max(farray_scaled_new)
+    
+    fs_rd = 0.1 # do not downsample above 250Hz
+    new_fs1 = np.linspace(fs_min, fs_rd, int(len(farray_scaled_new)*fs_rd/(fs_max-fs_min)) )
+    new_fs2 = np.linspace(fs_rd, fs_max, len(farray_scaled_new)//10)  # downsample at low freq (high fs)
+    #print(f"len fs1: {len(new_fs1)}, len fs2: {len(new_fs2)}")
+    #print(f"samp density fs1: {int(len(new_fs1)/fs_rd)}, len fs2: {int(len(new_fs2)/(fs_max-fs_rd))}")
+    new_fs = np.append(new_fs1,new_fs2)
     
     h_list_scaled_resampled = []
-    for h in h_list_scaled:
-        interpolator = scipy.interpolate.CubicSpline(farray_scaled, h)
+    for h in h_list_scaled_new:
+        interpolator = scipy.interpolate.CubicSpline(farray_scaled_new, h)  #sinc
         new_h = interpolator(new_fs)
         h_list_scaled_resampled.append(new_h[::-1])
     
@@ -297,11 +313,12 @@ def get_inj_paras(parameter_values,
 
 
 
-N=1000
+N=5000
 #q = np.logspace(np.log10(0.5),0,N)  # q from 0.5 to 1
-q = np.linspace(0.7,1,N)
+q = np.linspace(0.25,1,N)
 
-Mtot=60
+#Mtot=60
+Mtot=25
 
 mass_1 = Mtot/(1+q)
 mass_2 = mass_1*q
@@ -309,8 +326,8 @@ mass_2 = mass_1*q
 mass_ratio = np.zeros(N) + q
 chirp_mass = conversion.component_masses_to_chirp_mass(mass_1,mass_2)
     
-spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.5)
-spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.5)
+spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.8)
+spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.8)
 
 
 iota = generate_random_angle(N, 'cos')
@@ -345,10 +362,12 @@ for i in range(len(para_list)):
     samples[:,i] = para_list[i] 
 
 
-duration=32
+duration=16*2
 f_lower=20
-sampling_frequency=8192
-approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
+sampling_frequency=4096*2
+#approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
+#approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM','NRSur7dq4']
+approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM']
 n_approx = len(approximant_list)
 
 data_dict = dict()
@@ -408,6 +427,8 @@ for waveform_index in range(N):
         data_dict['source_parameters'][paraname].append(injection_para[paraname])
 
 save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-h5filename = save_folder + 'gw_fd_8D_q7a5_2N2000_Pv2v4P_downsampled.h5'
-
+h5filename = save_folder + 'gw_fd_8D_q25a8M25_2N10k_IMREOB_PHM.h5'
+# 1: 4s, 4096Hz
+# 2: 16s, 4096Hz, //3
+# 3: 32s, 8192Hz, //10
 save_dict_to_hdf5(data_dict, h5filename)

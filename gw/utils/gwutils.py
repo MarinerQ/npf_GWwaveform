@@ -4,17 +4,20 @@ from torch.utils.data import Dataset
 from npf.utils.helpers import rescale_range
 import h5py
 from npf.neuralproc.base import LatentNeuralProcessFamily
+import scipy
 
+# The following 4 hdf saving/reading functions are from
+# https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
 def save_dict_to_hdf5(dic, filename):
     """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
+    
     """
     with h5py.File(filename, 'w') as h5file:
         recursively_save_dict_contents_to_group(h5file, '/', dic)
 
 def recursively_save_dict_contents_to_group(h5file, path, dic):
     """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
+    
     """
     for key, item in dic.items():
         if isinstance(item, (np.ndarray, np.int64, np.float64, str, bytes, list)):
@@ -26,14 +29,14 @@ def recursively_save_dict_contents_to_group(h5file, path, dic):
 
 def load_dict_from_hdf5(filename):
     """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
+    
     """
     with h5py.File(filename, 'r') as h5file:
         return recursively_load_dict_contents_from_group(h5file, '/')
 
 def recursively_load_dict_contents_from_group(h5file, path):
     """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
+    
     """
     ans = {}
     for key, item in h5file[path].items():
@@ -160,6 +163,223 @@ def get_gwfdh5_nsample(gwh5file):
     return l
 
 
+class GWDatasetFDMultimodel(Dataset):
+    def __init__(self, h5file,
+                root_dir=None, indcies=None,
+                mode='plus', part='real', wavetype='scaled_resampled',
+                models='all'):
+        """
+        Gravitational wave dataset. Waveforms are in FD.
+
+
+        Parameters:
+        h5file: Path to waveform h5 filename.
+
+        indcies: Indices of waveforms you want to select. E.g. a h5 file contains 1000 waveforms, you
+        may want to select 700 of them for training, 2*150 for testing and validating.
+
+        mode: 'plus' (default) or 'cross'.
+
+        part: 'real' (default) or 'imag'.
+
+        wavetype: 'scaled_resampled'
+
+        models: 'all' (default) or list of waveform models you want to use, e.g. ['IMRPhenomPv2'].
+        """
+        self.h5file = h5file
+        self.root_dir = root_dir
+        self.n_samples = get_gwfdh5_nsample(h5file)
+        if indcies is None:
+            indcies = np.arange(self.n_samples)
+        else:
+            self.n_samples = len(indcies)
+        self.mode = mode
+        self.part = part
+        self.wavetype = wavetype
+
+        self.fdwaveforms = dict()
+        with h5py.File(h5file, "r") as f:
+            if models=='all':
+                self.waveform_models = np.array(list(f['waveform_fd']))
+                self.n_models = len(self.waveform_models)
+            else:
+                self.waveform_models = []
+                for m in models:
+                    self.waveform_models.append(m)
+                self.waveform_models = np.array(self.waveform_models)
+                self.n_models = len(self.waveform_models)
+            self.frequency_array = np.array(f['frequency'][f'frequency_array_{wavetype}'])
+            
+            for approx in self.waveform_models:
+                if part=='real':
+                    self.fdwaveforms[approx] = np.real(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
+                elif part=='imag':
+                    self.fdwaveforms[approx] = np.imag(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
+                else:
+                    raise Exception(f'Wrong part {part}!')
+
+            self.source_parameter_names = np.array(list(f['source_parameters']))
+            self.source_parameters = {}
+            for name in self.source_parameter_names:
+                self.source_parameters[name] = np.array(list(f['source_parameters'][name]))[indcies]
+        
+        
+        
+    def __len__(self):
+        return self.n_samples
+    
+    def remove_nan(self, array):
+        return array[~np.isnan(array)]
+    
+    def __getitem__(self, index):
+        f = np.array([])
+        h = np.array([])
+        for approx in self.waveform_models:
+            f = np.append(f, self.frequency_array)
+            h = np.append(h, self.fdwaveforms[approx][index])
+
+        arg_sorted = np.argsort(f)
+        f = f[arg_sorted]
+        h = h[arg_sorted] #/ 100
+
+        f = rescale_range(f, (f.min(),f.max()), (-1,1))
+        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
+
+    
+    def get_specific_model(self,index, approx, rescalex=True):
+        f = self.frequency_array
+        h = self.fdwaveforms[approx][index] #/ 100
+
+        if rescalex:
+            f = rescale_range(f, (f.min(),f.max()), (-1,1))
+
+        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
+
+
+
+
+
+
+
+class GWDatasetFDMultimodelNDOutput(Dataset):
+    def __init__(self, h5file,
+                root_dir=None, indcies=None,
+                mode=['plus'], part=['real'], wavetype='scaled_resampled',
+                models='all'):
+        """
+        Gravitational wave dataset. Waveforms are in FD.
+
+
+        Parameters:
+        h5file: Path to waveform h5 filename.
+
+        indcies: Indices of waveforms you want to select. E.g. a h5 file contains 1000 waveforms, you
+        may want to select 700 of them for training, 2*150 for testing and validating.
+
+        mode: 'plus' (default) or 'cross'.
+
+        part: 'real' (default) or 'imag'.
+
+        wavetype: 'scaled_resampled'
+
+        models: 'all' (default) or list of waveform models you want to use, e.g. ['IMRPhenomPv2'].
+        """
+        self.h5file = h5file
+        self.root_dir = root_dir
+        self.n_samples = get_gwfdh5_nsample(h5file)
+        if indcies is None:
+            indcies = np.arange(self.n_samples)
+        else:
+            self.n_samples = len(indcies)
+        self.mode = mode
+        self.part = part
+        self.wavetype = wavetype
+
+        #self.fdwaveforms = dict()
+        self.fdwaveforms_all = dict()
+
+        with h5py.File(h5file, "r") as f:
+            if models=='all':
+                self.waveform_models = np.array(list(f['waveform_fd']))
+                self.n_models = len(self.waveform_models)
+            else:
+                self.waveform_models = []
+                for m in models:
+                    self.waveform_models.append(m)
+                    
+                self.waveform_models = np.array(self.waveform_models)
+                self.n_models = len(self.waveform_models)
+            self.frequency_array = np.array(f['frequency'][f'frequency_array_{wavetype}'])
+            
+            
+            for approx in self.waveform_models:
+                self.fdwaveforms_all[approx] = dict()
+                self.fdwaveforms_all[approx]['plus'] = dict()
+                self.fdwaveforms_all[approx]['cross'] = dict()
+                self.fdwaveforms_all[approx]['plus']['real'] = np.real(np.array(list(f['waveform_fd'][approx]['plus'][wavetype])))[indcies]
+                self.fdwaveforms_all[approx]['plus']['imag'] = np.imag(np.array(list(f['waveform_fd'][approx]['plus'][wavetype])))[indcies]
+                self.fdwaveforms_all[approx]['cross']['real'] = np.real(np.array(list(f['waveform_fd'][approx]['cross'][wavetype])))[indcies]
+                self.fdwaveforms_all[approx]['cross']['imag'] = np.imag(np.array(list(f['waveform_fd'][approx]['cross'][wavetype])))[indcies]
+                
+                '''
+                if part=='real':
+                    self.fdwaveforms[approx] = np.real(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
+                elif part=='imag':
+                    self.fdwaveforms[approx] = np.imag(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
+                else:
+                    raise Exception(f'Wrong part {part}!')
+                '''
+            self.source_parameter_names = np.array(list(f['source_parameters']))
+            self.source_parameters = {}
+            for name in self.source_parameter_names:
+                self.source_parameters[name] = np.array(list(f['source_parameters'][name]))[indcies]
+        
+        
+        
+    def __len__(self):
+        return self.n_samples
+    
+    def remove_nan(self, array):
+        return array[~np.isnan(array)]
+    
+    def __getitem__(self, index):
+        f = np.array([])
+        h1 = np.array([])
+        h2 = np.array([])
+        for approx in self.waveform_models:
+            f = np.append(f, self.frequency_array)
+            h1 = np.append(h1, self.fdwaveforms_all[approx]['plus']['real'][index])
+            h2 = np.append(h2, self.fdwaveforms_all[approx]['cross']['imag'][index])
+
+        arg_sorted = np.argsort(f)
+        f = f[arg_sorted]
+        h1 = h1[arg_sorted] / 100
+        h2 = h2[arg_sorted] / 100
+        h = np.array([h1, h2]).T
+        f = rescale_range(f, (f.min(),f.max()), (-1,1))
+        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).type(torch.float32)
+
+    
+    def get_specific_model(self,index, approx, rescalex=True):
+        f = self.frequency_array
+        h1 = self.fdwaveforms_all[approx]['plus']['real'][index] 
+        h2 = self.fdwaveforms_all[approx]['cross']['imag'][index]
+        h1 = h1 / 100
+        h2 = h2 / 100
+        h = np.array([h1, h2]).T
+
+        if rescalex:
+            f = rescale_range(f, (f.min(),f.max()), (-1,1))
+
+        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).type(torch.float32)
+
+
+
+
+
+
+
+'''
 class GWDataset(Dataset):
     def __init__(self, h5file,
                  root_dir=None, indcies=None):
@@ -383,72 +603,4 @@ class GWDatasetCutStReMultimodel(Dataset):
         data_index_in_dataset = int(self.n_models * data_index_in_model + model_index)
         return self.get_unresampled_item(data_index_in_dataset)
 
-
-
-class GWDatasetFDMultimodel(Dataset):
-    def __init__(self, h5file,
-                root_dir=None, indcies=None,
-                mode='plus', part='real', wavetype='scaled_resampled'):
-        """
-        Gravitational wave dataset. Waveforms are in FD.
-        """
-        self.h5file = h5file
-        self.root_dir = root_dir
-        self.n_samples = get_gwfdh5_nsample(h5file)
-        if indcies is None:
-            indcies = np.arange(self.n_samples)
-        else:
-            self.n_samples = len(indcies)
-        self.mode = mode
-        self.part = part
-        self.wavetype = wavetype
-
-        self.fdwaveforms = dict()
-        with h5py.File(h5file, "r") as f:
-            self.waveform_models = np.array(list(f['waveform_fd']))
-            self.n_models = len(self.waveform_models)
-            self.frequency_array = np.array(f['frequency'][f'frequency_array_{wavetype}'])
-            
-            for approx in self.waveform_models:
-                if part=='real':
-                    self.fdwaveforms[approx] = np.real(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
-                elif part=='imag':
-                    self.fdwaveforms[approx] = np.imag(np.array(list(f['waveform_fd'][approx][mode][wavetype])))[indcies]
-                else:
-                    raise Exception(f'Wrong part {part}!')
-
-            self.source_parameter_names = np.array(list(f['source_parameters']))
-            self.source_parameters = {}
-            for name in self.source_parameter_names:
-                self.source_parameters[name] = np.array(list(f['source_parameters'][name]))[indcies]
-        
-        
-        
-    def __len__(self):
-        return self.n_samples
-    
-    def remove_nan(self, array):
-        return array[~np.isnan(array)]
-    
-    def __getitem__(self, index):
-        f = np.array([])
-        h = np.array([])
-        for approx in self.waveform_models:
-            f = np.append(f, self.frequency_array)
-            h = np.append(h, self.fdwaveforms[approx][index])
-
-        arg_sorted = np.argsort(f)
-        f = f[arg_sorted]
-        h = h[arg_sorted] / 100
-
-        f = rescale_range(f, (f.min(),f.max()), (-1,1))
-        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
-
-    
-    def get_specific_model(self,index, approx):
-        f = self.frequency_array
-        h = self.fdwaveforms[approx][index] / 100
-
-        f = rescale_range(f, (f.min(),f.max()), (-1,1))
-
-        return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
+'''
