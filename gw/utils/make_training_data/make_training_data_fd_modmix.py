@@ -2,7 +2,7 @@ import numpy as np
 from functools import partial
 import multiprocessing
 from multiprocessing import Pool
-
+import sys
 
 import h5py
 import scipy
@@ -255,7 +255,7 @@ def resample_scaled_fdwaveforms(farray_scaled, h_list_scaled):
     new_fs2 = np.linspace(fs_rd, fs_max, len(farray_scaled_new)//10)  # downsample at low freq (high fs)
     #print(f"len fs1: {len(new_fs1)}, len fs2: {len(new_fs2)}")
     #print(f"samp density fs1: {int(len(new_fs1)/fs_rd)}, len fs2: {int(len(new_fs2)/(fs_max-fs_rd))}")
-    new_fs = np.append(new_fs1,new_fs2)
+    new_fs = np.append(new_fs1,new_fs2[1:])
     
     h_list_scaled_resampled = []
     for h in h_list_scaled_new:
@@ -311,124 +311,135 @@ def get_inj_paras(parameter_values,
         inj_paras[para_name] = parameter_values[i]
     return inj_paras 
 
+# nohup python make_training_data_fd_modmix.py PHM 40 >nohup_PHM40.out &
+# nohup python make_training_data_fd_modmix.py P 40 >nohup_P40.out &
+if __name__ == '__main__':
+    phy = str(sys.argv[1])
+    Mtot = int(sys.argv[2])
 
+    N=5000
+    #q = np.logspace(np.log10(0.5),0,N)  # q from 0.5 to 1
+    q = np.linspace(0.25,1,N)
 
-N=5000
-#q = np.logspace(np.log10(0.5),0,N)  # q from 0.5 to 1
-q = np.linspace(0.25,1,N)
+    #Mtot=60
+    #Mtot=25  # minimum m2=5 for qmin=0.25
+    #Mtot=40  # minimum m2=8 for qmin=0.25
 
-#Mtot=60
-Mtot=25
+    mass_1 = Mtot/(1+q)
+    mass_2 = mass_1*q
 
-mass_1 = Mtot/(1+q)
-mass_2 = mass_1*q
-
-mass_ratio = np.zeros(N) + q
-chirp_mass = conversion.component_masses_to_chirp_mass(mass_1,mass_2)
-    
-spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.8)
-spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.8)
-
-
-iota = generate_random_angle(N, 'cos')
-fref_list = np.zeros(N)+50.0
-phiref_list = np.zeros(N)
-converted_spin = pespin.spin_angles(mass_1,mass_2,iota , spin1x, spin1y, spin1z, spin2x, spin2y,spin2z, fref_list,phiref_list)
-theta_jn = converted_spin[:,0]
-phi_jl = converted_spin[:,1]
-tilt_1 = converted_spin[:,2]
-tilt_2 = converted_spin[:,3]
-phi_12 = converted_spin[:,4]
-a_1 = converted_spin[:,5]
-a_2 = converted_spin[:,6]
+    mass_ratio = np.zeros(N) + q
+    chirp_mass = conversion.component_masses_to_chirp_mass(mass_1,mass_2)
         
-        
-luminosity_distance = np.zeros(N) + 100
-phase = np.zeros(N)
-
-# unimportant paras
-geocent_time= np.zeros(N)
-psi = np.zeros(N)
-ra = np.zeros(N)
-dec = np.zeros(N)
+    spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.8)
+    spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.8)
 
 
-para_list = [chirp_mass,mass_ratio,a_1,a_2,tilt_1,tilt_2,phi_12,phi_jl,
-                theta_jn, psi, phase, ra, dec, luminosity_distance, geocent_time]
+    iota = generate_random_angle(N, 'cos')
+    fref_list = np.zeros(N)+50.0
+    phiref_list = np.zeros(N)
+    converted_spin = pespin.spin_angles(mass_1,mass_2,iota , spin1x, spin1y, spin1z, spin2x, spin2y,spin2z, fref_list,phiref_list)
+    theta_jn = converted_spin[:,0]
+    phi_jl = converted_spin[:,1]
+    tilt_1 = converted_spin[:,2]
+    tilt_2 = converted_spin[:,3]
+    phi_12 = converted_spin[:,4]
+    a_1 = converted_spin[:,5]
+    a_2 = converted_spin[:,6]
+            
+            
+    luminosity_distance = np.zeros(N) + 100
+    phase = np.zeros(N)
 
-samples = np.zeros(shape=(N,len(para_list)) )
-
-for i in range(len(para_list)):
-    samples[:,i] = para_list[i] 
-
-
-duration=16*2
-f_lower=20
-sampling_frequency=4096*2
-#approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
-#approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM','NRSur7dq4']
-approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM']
-n_approx = len(approximant_list)
-
-data_dict = dict()
-
-data_dict['frequency'] = dict()
-data_dict['frequency']['frequency_array_original'] = []
-data_dict['frequency']['frequency_array_scaled'] = []
-data_dict['frequency']['frequency_array_scaled_resampled'] = []
-
-data_dict['waveform_fd'] = dict()
-for approx in approximant_list:
-    data_dict['waveform_fd'][approx] = dict()
-    data_dict['waveform_fd'][approx]['plus'] = dict()
-    data_dict['waveform_fd'][approx]['cross'] = dict()
-    for mode in ['plus', 'cross']:
-        data_dict['waveform_fd'][approx][mode] = dict()
-        #data_dict['waveform_fd'][approx][mode]['original'] = []
-        #data_dict['waveform_fd'][approx][mode]['scaled'] = []
-        data_dict['waveform_fd'][approx][mode]['scaled_resampled'] = []
+    # unimportant paras
+    geocent_time= np.zeros(N)
+    psi = np.zeros(N)
+    ra = np.zeros(N)
+    dec = np.zeros(N)
 
 
-data_dict['source_parameters'] = dict()
-parameter_name_list = ['chirp_mass','mass_ratio','a_1','a_2','tilt_1','tilt_2','phi_12','phi_jl','theta_jn']
-for paraname in parameter_name_list:
-    data_dict['source_parameters'][paraname] = []
+    para_list = [chirp_mass,mass_ratio,a_1,a_2,tilt_1,tilt_2,phi_12,phi_jl,
+                    theta_jn, psi, phase, ra, dec, luminosity_distance, geocent_time]
+
+    samples = np.zeros(shape=(N,len(para_list)) )
+
+    for i in range(len(para_list)):
+        samples[:,i] = para_list[i] 
 
 
-for waveform_index in range(N):
-    # calculation
-    if i%100 ==0:
-        print(f"Flag: {i}-th simulation.")
-    injection_para = get_inj_paras(samples[waveform_index])
-    
-    freq_array, h_list = make_FDaligned_waveforms(injection_para,
-        duration, f_lower, sampling_frequency,
-        approximant_list=approximant_list, mode='both')
-    freq_array_scaled, h_list_scaled = scale_aligned_fdwaveforms(freq_array, h_list, injection_para['chirp_mass'])
-    freq_array_scaled_resampled, h_list_scaled_resampled = resample_scaled_fdwaveforms(freq_array_scaled, h_list_scaled)
-    
-    
-    # save to data_dic
-    data_dict['frequency']['frequency_array_original'] = freq_array
-    data_dict['frequency']['frequency_array_scaled'] = freq_array_scaled
-    data_dict['frequency']['frequency_array_scaled_resampled'] = freq_array_scaled_resampled
-    
-    for approx_index,approx in enumerate(approximant_list):
-        #data_dict['waveform_fd'][approx]['plus']['original'].append(h_list[2*approx_index])
-        #data_dict['waveform_fd'][approx]['cross']['original'].append(h_list[2*approx_index+1])
-        
-        #data_dict['waveform_fd'][approx]['plus']['scaled'].append(h_list_scaled[2*approx_index])
-        #data_dict['waveform_fd'][approx]['cross']['scaled'].append(h_list_scaled[2*approx_index+1])
-        
-        data_dict['waveform_fd'][approx]['plus']['scaled_resampled'].append(h_list_scaled_resampled[2*approx_index])
-        data_dict['waveform_fd'][approx]['cross']['scaled_resampled'].append(h_list_scaled_resampled[2*approx_index+1])
-    
+    duration=16*2
+    f_lower=20
+    sampling_frequency=4096*2
+
+    if phy=="P":
+        approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
+    elif phy=="PHM":
+        approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM']
+    else:
+        raise Exception("Wrong phy!")
+    #approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM','NRSur7dq4']
+    #
+    n_approx = len(approximant_list)
+
+    data_dict = dict()
+
+    data_dict['frequency'] = dict()
+    data_dict['frequency']['frequency_array_original'] = []
+    data_dict['frequency']['frequency_array_scaled'] = []
+    data_dict['frequency']['frequency_array_scaled_resampled'] = []
+
+    data_dict['waveform_fd'] = dict()
+    for approx in approximant_list:
+        data_dict['waveform_fd'][approx] = dict()
+        data_dict['waveform_fd'][approx]['plus'] = dict()
+        data_dict['waveform_fd'][approx]['cross'] = dict()
+        for mode in ['plus', 'cross']:
+            data_dict['waveform_fd'][approx][mode] = dict()
+            #data_dict['waveform_fd'][approx][mode]['original'] = []
+            #data_dict['waveform_fd'][approx][mode]['scaled'] = []
+            data_dict['waveform_fd'][approx][mode]['scaled_resampled'] = []
+
+
+    data_dict['source_parameters'] = dict()
+    parameter_name_list = ['chirp_mass','mass_ratio','a_1','a_2','tilt_1','tilt_2','phi_12','phi_jl','theta_jn']
     for paraname in parameter_name_list:
-        data_dict['source_parameters'][paraname].append(injection_para[paraname])
+        data_dict['source_parameters'][paraname] = []
 
-save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-h5filename = save_folder + 'gw_fd_8D_q25a8M25_2N10k_IMREOB_PHM.h5'
-# 1: 4s, 4096Hz
-# 2: 16s, 4096Hz, //3
-# 3: 32s, 8192Hz, //10
-save_dict_to_hdf5(data_dict, h5filename)
+
+    for waveform_index in range(N):
+        # calculation
+        if i%100 ==0:
+            print(f"Flag: {i}-th simulation.")
+        injection_para = get_inj_paras(samples[waveform_index])
+        
+        freq_array, h_list = make_FDaligned_waveforms(injection_para,
+            duration, f_lower, sampling_frequency,
+            approximant_list=approximant_list, mode='both')
+        freq_array_scaled, h_list_scaled = scale_aligned_fdwaveforms(freq_array, h_list, injection_para['chirp_mass'])
+        freq_array_scaled_resampled, h_list_scaled_resampled = resample_scaled_fdwaveforms(freq_array_scaled, h_list_scaled)
+        
+        
+        # save to data_dic
+        data_dict['frequency']['frequency_array_original'] = freq_array
+        data_dict['frequency']['frequency_array_scaled'] = freq_array_scaled
+        data_dict['frequency']['frequency_array_scaled_resampled'] = freq_array_scaled_resampled
+        
+        for approx_index,approx in enumerate(approximant_list):
+            #data_dict['waveform_fd'][approx]['plus']['original'].append(h_list[2*approx_index])
+            #data_dict['waveform_fd'][approx]['cross']['original'].append(h_list[2*approx_index+1])
+            
+            #data_dict['waveform_fd'][approx]['plus']['scaled'].append(h_list_scaled[2*approx_index])
+            #data_dict['waveform_fd'][approx]['cross']['scaled'].append(h_list_scaled[2*approx_index+1])
+            
+            data_dict['waveform_fd'][approx]['plus']['scaled_resampled'].append(h_list_scaled_resampled[2*approx_index])
+            data_dict['waveform_fd'][approx]['cross']['scaled_resampled'].append(h_list_scaled_resampled[2*approx_index+1])
+        
+        for paraname in parameter_name_list:
+            data_dict['source_parameters'][paraname].append(injection_para[paraname])
+
+    save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
+    h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
+    # 1: 4s, 4096Hz
+    # 2: 16s, 4096Hz, //3
+    # 3: 32s, 8192Hz, //10
+    save_dict_to_hdf5(data_dict, h5filename)
