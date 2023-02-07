@@ -177,7 +177,7 @@ def get_gwfdh5_nsample(gwh5file):
         l = len(list(f['waveform_fd'][approx]['plus']['scaled_resampled']))
     return l
 
-def get_trained_gwmodels(path):
+def get_trained_gwmodels(path,device):
     R_DIM = 128
     KWARGS = dict(
         r_dim=R_DIM,
@@ -219,6 +219,7 @@ def get_trained_gwmodels(path):
         is_continue_train=False,
         criterion=CNPFLoss,
         chckpnt_dirname=path,
+        device=device,
     )
 
     # 1D
@@ -332,13 +333,14 @@ class GWDatasetFDMultimodel(Dataset):
 class NPWaveformGenerator():
     def __init__(self, model_path,
                 context_waveform_generator,
+                device='cuda',
                 npmodel_total_mass=40, 
                 npmodel_f_low=20,
                 npmodel_f_ref = 50, 
                 npmodel_duration = 32,
                 npmodel_sampling_frequency = 8192
                 ):
-        npmodel_dict = get_trained_gwmodels(model_path)
+        npmodel_dict = get_trained_gwmodels(model_path,device=device)
         self.npmodel_dict = npmodel_dict
         self.npmodel_total_mass = npmodel_total_mass
         self.npmodel_f_low = npmodel_f_low
@@ -378,9 +380,9 @@ class NPWaveformGenerator():
         c=299792458
         G=6.67e-11
         A=(np.pi)**(-2/3)*np.sqrt(5/24)
+        farray = (f_mono/1e3)**(-3/5)
         amp = A*c*(G*chirp_mass/c**3)**(5/6) * farray**(-7/6)
         harray = h_mono * amp
-        farray = (f_mono/1e3)**(-3/5)
 
         return farray, harray
 
@@ -441,28 +443,28 @@ class NPWaveformGenerator():
 
             model = self.npmodel_dict[label]
             mean_resampled, std_resampled = get_predictions(model,
-                                                torch.from_numpy(f_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
-                                                torch.from_numpy(h_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
-                                                torch.from_numpy(f_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                torch.from_numpy(f_mono_resampled[::-1]).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                torch.from_numpy(h_mono_resampled[::-1]).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                torch.from_numpy(f_mono_resampled[::-1]).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
                                                 1)
             mean_resampled = mean_resampled[::-1]
             std_resampled = std_resampled[::-1]
             mean_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, mean_resampled, f_mono)
             std_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, std_resampled, f_mono)
 
-            mean_scaled = self.unmonochromatize_waveform(f_mono, mean_mono, parameters['chirp_mass']/mratio)
-            std_scaled = self.unmonochromatize_waveform(f_mono, std_mono, parameters['chirp_mass']/mratio)
+            farray2, mean_scaled = self.unmonochromatize_waveform(f_mono, mean_mono, parameters['chirp_mass']/mratio)
+            farray2, std_scaled = self.unmonochromatize_waveform(f_mono, std_mono, parameters['chirp_mass']/mratio)
 
             # unscale to injection mass
-            # farray2 should == farray (?)
-            farray2, mean = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=mean_scaled, base_mass=self.npmodel_total_mass)
-            farray2, std = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=std_scaled, base_mass=self.npmodel_total_mass)
+            # farray3 should == farray (?)
+            farray3, mean = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=mean_scaled, base_mass=self.npmodel_total_mass)
+            farray3, std = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=std_scaled, base_mass=self.npmodel_total_mass)
 
             zerolenth = len(np.where(self.context_frequency_array<min(fmin4inj,self.context_f_low))[0])
             zero_paddings = np.zeros(zerolenth)
             
-            mean_dict[label] = np.apprnd(zero_paddings, mean)
-            std_dict[label] = np.apprnd(zero_paddings, std)
+            mean_dict[label] = np.append(zero_paddings, mean) * 100 / parameters['luminosity_distance']
+            std_dict[label] = np.append(zero_paddings, std) * 100 / parameters['luminosity_distance']
         
         h_dict = {}
         error_dict = {}
