@@ -1,10 +1,25 @@
+import logging
+import sys
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 from npf.utils.helpers import rescale_range
 import h5py
 from npf.neuralproc.base import LatentNeuralProcessFamily
+from npf.architectures import CNN, MLP, ResConvBlock, SetConv, discard_ith_arg
+from npf import CNPFLoss
+from utils.ntbks_helpers import add_y_dim
+from utils.train import train_models
+from npf import ConvCNP
+
+from functools import partial
 import scipy
+import bilby
+
+logging.disable(logging.ERROR)
+#import warnings
+#warnings.filterwarnings("ignore")
+#warnings.simplefilter("ignore")
 
 # The following 4 hdf saving/reading functions are from
 # https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
@@ -162,6 +177,64 @@ def get_gwfdh5_nsample(gwh5file):
         l = len(list(f['waveform_fd'][approx]['plus']['scaled_resampled']))
     return l
 
+def get_trained_gwmodels(path):
+    R_DIM = 128
+    KWARGS = dict(
+        r_dim=R_DIM,
+        Decoder=discard_ith_arg(  # disregards the target features to be translation equivariant
+            partial(MLP, n_hidden_layers=4, hidden_size=R_DIM), i=0
+        ),
+    )
+
+
+    CNN_KWARGS = dict(
+        ConvBlock=ResConvBlock,
+        is_chan_last=True,  # all computations are done with channel last in our code
+        n_conv_layers=2,  # layers per block
+    )
+
+
+    # off the grid
+    model_1d = partial(
+        ConvCNP,
+        x_dim=1,
+        y_dim=1,
+        Interpolator=SetConv,
+        CNN=partial(
+            CNN,
+            Conv=torch.nn.Conv1d,
+            Normalization=torch.nn.BatchNorm1d,
+            n_blocks=5,
+            kernel_size=19,
+            **CNN_KWARGS,
+        ),
+        density_induced=64,  # density of discretization
+        **KWARGS,
+    )
+
+
+    # FULLFD_IMREOB_PHM_q25a8M40_2N10k
+    KWARGS = dict(
+        is_retrain=False,  # whether to load precomputed model or retrain
+        is_continue_train=False,
+        criterion=CNPFLoss,
+        chckpnt_dirname=path,
+    )
+
+    # 1D
+    trainers_1d = train_models(
+        datasets={'plus_real':[],'plus_imag':[],'cross_real':[],'cross_imag':[] },
+        models={"ConvCNP": model_1d},
+        test_datasets={'plus_real':[],'plus_imag':[],'cross_real':[],'cross_imag':[] },
+        **KWARGS
+    )
+
+    model_dict = {}
+    for key in ['plus_real', 'plus_imag', 'cross_real', 'cross_imag']:
+        model_dict[key] = trainers_1d[f'{key}/ConvCNP/run_0'].module_
+
+    return model_dict
+
 
 class GWDatasetFDMultimodel(Dataset):
     def __init__(self, h5file,
@@ -256,9 +329,151 @@ class GWDatasetFDMultimodel(Dataset):
         return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).unsqueeze(-1).type(torch.float32)
 
 
+class NPWaveformGenerator():
+    def __init__(self, model_path,
+                context_waveform_generator,
+                npmodel_total_mass=40, 
+                npmodel_f_low=20,
+                npmodel_f_ref = 50, 
+                npmodel_duration = 32,
+                npmodel_sampling_frequency = 8192
+                ):
+        npmodel_dict = get_trained_gwmodels(model_path)
+        self.npmodel_dict = npmodel_dict
+        self.npmodel_total_mass = npmodel_total_mass
+        self.npmodel_f_low = npmodel_f_low
+        self.npmodel_f_ref = npmodel_f_ref
+        self.npmodel_duration = npmodel_duration
+        self.npmodel_sampling_frequency = npmodel_sampling_frequency
+        #self.npmodel_frequency_array =\
+        #    np.linspace(0, npmodel_sampling_frequency/2, npmodel_sampling_frequency//2 * duration + 1)
 
+        self.context_waveform_generator = context_waveform_generator
+        self.context_duration = context_waveform_generator.duration
+        self.context_sampling_frequency = context_waveform_generator.sampling_frequency
+        self.context_f_low = context_waveform_generator.waveform_arguments['minimum_frequency']
+        self.context_f_ref = context_waveform_generator.waveform_arguments['reference_frequency']
+        self.context_frequency_array = context_waveform_generator.frequency_array
+        self.context_frequency_mask = context_waveform_generator.frequency_array>=self.context_f_low
+        
+    
+    def scale_waveform(self, target_mass, base_f, base_h, base_mass):
+        mratio = target_mass/base_mass
+        target_f = base_f / mratio
+        target_h = base_h * mratio**2
 
+        return target_f, target_h
 
+    def monochromatize_waveform(self, farray, harray, chirp_mass):
+        c=299792458
+        G=6.67e-11
+        A=(np.pi)**(-2/3)*np.sqrt(5/24)
+        amp = A*c*(G*chirp_mass/c**3)**(5/6) * farray**(-7/6)
+        h_mono = harray / amp
+        f_mono = farray**(-5/3) * 1e3
+
+        return f_mono, h_mono
+    
+    def unmonochromatize_waveform(self, f_mono, h_mono, chirp_mass):
+        c=299792458
+        G=6.67e-11
+        A=(np.pi)**(-2/3)*np.sqrt(5/24)
+        amp = A*c*(G*chirp_mass/c**3)**(5/6) * farray**(-7/6)
+        harray = h_mono * amp
+        farray = (f_mono/1e3)**(-3/5)
+
+        return farray, harray
+
+    def resample_mono_fdwaveforms(self, f_mono, h_mono):
+        f_mono_new = f_mono[::-1]
+        h_mono_new = h_mono[::-1]
+ 
+        fs_min = min(f_mono_new)
+        fs_max = max(f_mono_new)
+        
+        fs_rd = 0.1 # for M=25, ringfown freq=0.015. Take 0.02 here
+        new_fs1 = np.linspace(fs_min, fs_rd, int(len(f_mono_new)*fs_rd/(fs_max-fs_min)) )
+        new_fs2 = np.linspace(fs_rd, fs_max, len(f_mono_new)//10)
+        new_fs = np.append(new_fs1,new_fs2[1:])
+        
+        interpolator = scipy.interpolate.CubicSpline(f_mono_new, h_mono_new)
+        new_h = interpolator(new_fs)
+        
+        return new_fs[::-1], new_h[::-1]
+    
+    def unresample_mono_fdwaveforms(self, f_mono_resampled, h_mono_resampled, f_mono):
+        interpolator = scipy.interpolate.CubicSpline(f_mono_resampled[::-1], h_mono_resampled[::-1])
+        h_mono = interpolator(f_mono)
+        return h_mono
+
+        
+    def frequency_domain_strain(self, parameters):
+        mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(
+            parameters['chirp_mass'],
+            parameters['mass_ratio']
+        )
+        mratio = mtot/self.npmodel_total_mass
+
+        # Changing f_ref is effectively changing inclination and rotating spins, however our training includes all inclinations and spins. Therefore I am NOT going to scale f_ref and commented this out.
+        #self.context_waveform_generator.waveform_arguments['reference_frequency'] /= mratio
+
+        # However, keep in mind that our model learns weaveforms from 40Msun, f_low=20Hz - these two parameters do not span over the whole space. We have to scale them. 
+        self.context_waveform_generator.waveform_arguments['minimum_frequency'] /= mratio
+        fmin4inj = self.context_waveform_generator.waveform_arguments['minimum_frequency']
+        if fmin4inj>self.context_f_low: 
+            logging.warning(f"Mtot={mtot} < Training Mtot {self.npmodel_total_mass}, therefore changing starting frequency to {fmin4inj}Hz, which is higher than given {self.context_f_low}Hz.")
+
+        mask = self.context_frequency_array>=fmin4inj
+        h_dict_context = self.context_waveform_generator.frequency_domain_strain(parameters)
+        h_dict_context_components={}
+        h_dict_context_components['plus_real'] = np.real(h_dict_context['plus'])[mask]
+        h_dict_context_components['plus_imag'] = np.imag(h_dict_context['plus'])[mask]
+        h_dict_context_components['cross_real'] = np.real(h_dict_context['cross'])[mask]
+        h_dict_context_components['cross_imag'] = np.imag(h_dict_context['cross'])[mask]
+        farray = self.context_frequency_array[mask]
+
+        mean_dict={}
+        std_dict={}
+        for label,harray in h_dict_context_components.items():
+            scaled_context_f, scaled_context_h = self.scale_waveform(target_mass=self.npmodel_total_mass, base_f=farray, base_h=harray, base_mass=mtot)
+            f_mono, h_mono = self.monochromatize_waveform(scaled_context_f, scaled_context_h, parameters['chirp_mass']/mratio)
+            f_mono_resampled, h_mono_resampled = self.resample_mono_fdwaveforms(f_mono, h_mono)
+
+            model = self.npmodel_dict[label]
+            mean_resampled, std_resampled = get_predictions(model,
+                                                torch.from_numpy(f_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                torch.from_numpy(h_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                torch.from_numpy(f_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
+                                                1)
+            mean_resampled = mean_resampled[::-1]
+            std_resampled = std_resampled[::-1]
+            mean_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, mean_resampled, f_mono)
+            std_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, std_resampled, f_mono)
+
+            mean_scaled = self.unmonochromatize_waveform(f_mono, mean_mono, parameters['chirp_mass']/mratio)
+            std_scaled = self.unmonochromatize_waveform(f_mono, std_mono, parameters['chirp_mass']/mratio)
+
+            # unscale to injection mass
+            # farray2 should == farray (?)
+            farray2, mean = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=mean_scaled, base_mass=self.npmodel_total_mass)
+            farray2, std = self.scale_waveform(target_mass=mtot, base_f=scaled_context_f, base_h=std_scaled, base_mass=self.npmodel_total_mass)
+
+            zerolenth = len(np.where(self.context_frequency_array<min(fmin4inj,self.context_f_low))[0])
+            zero_paddings = np.zeros(zerolenth)
+            
+            mean_dict[label] = np.apprnd(zero_paddings, mean)
+            std_dict[label] = np.apprnd(zero_paddings, std)
+        
+        h_dict = {}
+        error_dict = {}
+        for key in ['plus', 'cross']:
+            h_dict[key] = mean_dict[f'{key}_real'] + mean_dict[f'{key}_imag']*1j
+            error_dict[key] = std_dict[f'{key}_real'] + std_dict[f'{key}_imag']*1j
+
+        #self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
+        self.context_waveform_generator.waveform_arguments['minimum_frequency'] *= mratio
+
+        return h_dict, error_dict
 
 
 class GWDatasetFDMultimodelNDOutput(Dataset):
@@ -372,12 +587,6 @@ class GWDatasetFDMultimodelNDOutput(Dataset):
             f = rescale_range(f, (f.min(),f.max()), (-1,1))
 
         return torch.from_numpy(f).unsqueeze(-1).type(torch.float32), torch.from_numpy(h).type(torch.float32)
-
-
-
-
-
-
 
 '''
 class GWDataset(Dataset):
