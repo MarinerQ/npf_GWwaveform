@@ -23,7 +23,7 @@ logging.disable(logging.ERROR)
 
 
 def my_inner_product(hf1,hf2,det,flag):
-    inner_prod_complex = gwutils.noise_weighted_inner_product(
+    inner_prod_complex = bilby.gw.utils.noise_weighted_inner_product(
                             aa=hf1[det.strain_data.frequency_mask],
                             bb=hf2[det.strain_data.frequency_mask],
                             power_spectral_density=det.power_spectral_density_array[det.strain_data.frequency_mask],

@@ -73,7 +73,7 @@ for mode in ['plus', 'cross']:
 # CONTEXT TARGET SPLIT
 get_cntxt_trgt_1d = cntxt_trgt_collate(
     CntxtTrgtGetter(
-        contexts_getter=GetRandomIndcs(a=0.6, b=0.8), targets_getter=GetRandomIndcs(a=0.6, b=0.8), #GetRandomIndcs(a=0.8, b=0.9)
+        contexts_getter=GetRandomIndcs(a=0.4, b=0.6), targets_getter=get_all_indcs, #GetRandomIndcs(a=0.8, b=0.9)
     )
 )
 
@@ -130,7 +130,8 @@ trainers_1d = train_models(
     test_datasets=gw_test_datasets,
     iterator_train__collate_fn=get_cntxt_trgt_1d,
     iterator_valid__collate_fn=get_cntxt_trgt_1d,
-    max_epochs=50,
+    max_epochs=100,
     **KWARGS
 )
 
+print("Done!")
