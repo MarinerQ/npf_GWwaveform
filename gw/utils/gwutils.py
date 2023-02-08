@@ -21,6 +21,67 @@ logging.disable(logging.ERROR)
 #warnings.filterwarnings("ignore")
 #warnings.simplefilter("ignore")
 
+
+def my_inner_product(hf1,hf2,det,flag):
+    inner_prod_complex = gwutils.noise_weighted_inner_product(
+                            aa=hf1[det.strain_data.frequency_mask],
+                            bb=hf2[det.strain_data.frequency_mask],
+                            power_spectral_density=det.power_spectral_density_array[det.strain_data.frequency_mask],
+                            duration=det.strain_data.duration)
+
+    #inner_prod_complex = det.inner_product_2(hf1, hf2)
+    if flag == "c":
+        return inner_prod_complex
+    elif flag == "r":
+        return np.real(inner_prod_complex)
+    else:
+        raise("Wrong flag!")
+
+
+def get_dtdphi_withift_zeropad(h1,h2,det):
+
+    psd = det.power_spectral_density_array
+    f_array = det.frequency_array
+    
+    X_of_f = h1*h2.conjugate()/psd
+    add_zero = np.zeros(int(63*len(X_of_f)))
+    X_of_f = np.append(X_of_f,add_zero)
+    X_of_t = np.fft.ifft(X_of_f)
+    
+    timelength = 1/(f_array[1]-f_array[0])
+    t = np.linspace(-timelength/2,timelength/2,len(X_of_t))
+    X_shifted = np.roll(X_of_t,len(X_of_t)//2)
+
+    jmax = np.argmax( abs(X_shifted) )
+    deltat = t[jmax]
+    phase1 = 2*np.pi*f_array*deltat
+    
+    freq_mask = det.strain_data.frequency_mask
+    inner_product = my_inner_product(h1.conjugate(), h2.conjugate()*np.exp(1j*phase1), det, 'c')
+    
+    '''
+    gwutils.noise_weighted_inner_product(
+                    aa=h1.conjugate()[freq_mask],
+                    bb=(h2.conjugate()*np.exp(1j*phase1))[freq_mask],
+                    power_spectral_density=det.power_spectral_density_array[freq_mask],
+                    duration=det.strain_data.duration)'''
+    
+    deltaphi = -np.angle(inner_product)
+    #phase2 = deltaphi
+    
+    return deltat,deltaphi
+
+
+def get_shifted_h2_zeropad(h1,h2,det):
+    '''
+    Return the h2*exp(-i*phase_shift), i.e. h2* exp -i*(2\pi f \Delta t + \Delta \phi)
+    '''
+    deltat,deltaphi = get_dtdphi_withift_zeropad(h1,h2,det)
+    f_array = det.frequency_array
+    exp_phase = np.exp(-1j*(2*np.pi*f_array*deltat + deltaphi) )
+    return h2*exp_phase
+
+
 # The following 4 hdf saving/reading functions are from
 # https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
 def save_dict_to_hdf5(dic, filename):
@@ -220,6 +281,7 @@ def get_trained_gwmodels(path,device):
         criterion=CNPFLoss,
         chckpnt_dirname=path,
         device=device,
+        batch_size=1
     )
 
     # 1D
@@ -333,7 +395,7 @@ class GWDatasetFDMultimodel(Dataset):
 class NPWaveformGenerator():
     def __init__(self, model_path,
                 context_waveform_generator,
-                device='cuda',
+                device='cpu',
                 npmodel_total_mass=40, 
                 npmodel_f_low=20,
                 npmodel_f_ref = 50, 
@@ -426,6 +488,8 @@ class NPWaveformGenerator():
             logging.warning(f"Mtot={mtot} < Training Mtot {self.npmodel_total_mass}, therefore changing starting frequency to {fmin4inj}Hz, which is higher than given {self.context_f_low}Hz.")
 
         mask = self.context_frequency_array>=fmin4inj
+        d_l = parameters['luminosity_distance']
+        parameters['luminosity_distance'] = 100
         h_dict_context = self.context_waveform_generator.frequency_domain_strain(parameters)
         h_dict_context_components={}
         h_dict_context_components['plus_real'] = np.real(h_dict_context['plus'])[mask]
@@ -463,8 +527,8 @@ class NPWaveformGenerator():
             zerolenth = len(np.where(self.context_frequency_array<min(fmin4inj,self.context_f_low))[0])
             zero_paddings = np.zeros(zerolenth)
             
-            mean_dict[label] = np.append(zero_paddings, mean) * 100 / parameters['luminosity_distance']
-            std_dict[label] = np.append(zero_paddings, std) * 100 / parameters['luminosity_distance']
+            mean_dict[label] = np.append(zero_paddings, mean) * 100 / d_l
+            std_dict[label] = np.append(zero_paddings, std) * 100 / d_l
         
         h_dict = {}
         error_dict = {}
@@ -474,7 +538,7 @@ class NPWaveformGenerator():
 
         #self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
         self.context_waveform_generator.waveform_arguments['minimum_frequency'] *= mratio
-
+        parameters['luminosity_distance']=d_l
         return h_dict, error_dict
 
 
