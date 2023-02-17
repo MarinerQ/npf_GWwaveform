@@ -1,5 +1,11 @@
 import logging
 import os
+os.environ['NVIDIA_VISIBLE_DEVICES'] = '0'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+# export NVIDIA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0
+# export C10_COMPILE_TIME_MAX_GPUS=3 (?
+# export CUDA_DEVICE_ORDER=PCI_BUS_ID
 import warnings
 import sys
 
@@ -34,10 +40,12 @@ from utils.data import cntxt_trgt_collate
 
 
 
+print(torch.cuda.current_device())
 
 root_dir = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
 h5filename = root_dir + 'gw_fd_8D_q25a8M40_2N10k_IMREOB_P.h5'
-output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_P_q25a8M40_2N10k/"
+#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_P_q25a8M40_2N10k/"
+output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0215_2/"
 
 Ngw = gwutils.get_gwfdh5_nsample(h5filename)
 Ntrain = int(Ngw*0.7)
@@ -45,19 +53,38 @@ Ntest = int(Ngw*0.15)
 Nvalid = Ngw - Ntrain - Ntest
 
 
+try:
+    train_index = np.int64(np.loadtxt(f'{output_dir}trainindex.txt'))
+    test_index = np.int64(np.loadtxt(f'{output_dir}testindex.txt'))
+    valid_index = np.int64(np.loadtxt(f'{output_dir}validindex.txt'))
+    print("Read precomputed indcies.")
+except:
+    print("Precomputed indcies not found. Regenerating and saving")
+    random_index = np.random.permutation(Ngw)
+    train_index = random_index[:Ntrain]
+    test_index = random_index[Ntrain:Ntrain+Ntest]
+    valid_index = random_index[-Nvalid:]
+
+    np.savetxt(f'{output_dir}trainindex.txt', train_index)
+    np.savetxt(f'{output_dir}testindex.txt', test_index)
+    np.savetxt(f'{output_dir}validindex.txt', valid_index)
+'''
 random_index = np.random.permutation(Ngw)
 train_index = random_index[:Ntrain]
 test_index = random_index[Ntrain:Ntrain+Ntest]
 valid_index = random_index[-Nvalid:]
-np.savetxt(f'{output_dir}trainindex.txt', train_index)
+np.savetxt(f'{output_dir}trainindex_LNP.txt', train_index)
 np.savetxt(f'{output_dir}testindex.txt', test_index)
 np.savetxt(f'{output_dir}validindex.txt', valid_index)
+'''
 
 gw_datasets = {}
 gw_test_datasets = {}
 gw_valid_datasets = {}
 for mode in ['plus', 'cross']:
     for part in ['real', 'imag']:
+#for mode in ['plus']:
+#    for part in ['real']:
         train_label = f'{mode}_{part}'
         print(f"Loading {train_label}...")
         gw_dataset = gwutils.GWDatasetFDMultimodel(h5file=h5filename, indcies=train_index, mode=mode, part=part)
@@ -73,7 +100,8 @@ for mode in ['plus', 'cross']:
 # CONTEXT TARGET SPLIT
 get_cntxt_trgt_1d = cntxt_trgt_collate(
     CntxtTrgtGetter(
-        contexts_getter=GetRandomIndcs(a=0.6, b=0.8), targets_getter=GetRandomIndcs(a=0.6, b=0.8), #GetRandomIndcs(a=0.8, b=0.9)
+        #contexts_getter=GetRandomIndcs(a=0.6, b=0.8), targets_getter=GetRandomIndcs(a=0.6, b=0.8), #GetRandomIndcs(a=0.8, b=0.9)
+        contexts_getter=GetRandomIndcs(a=0, b=0.3), targets_getter=get_all_indcs
     )
 )
 
@@ -117,10 +145,10 @@ KWARGS = dict(
     criterion=CNPFLoss,
     chckpnt_dirname=output_dir,
     device="cuda",
-    lr=5e-5,
+    lr=1e-4, # 5e-5
     decay_lr=10,
     seed=2023,
-    batch_size=4,
+    batch_size=2,
 )
 
 # 1D
