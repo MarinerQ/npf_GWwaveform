@@ -1,7 +1,7 @@
 import logging
 import os
-os.environ['NVIDIA_VISIBLE_DEVICES'] = '3'
-os.environ["CUDA_VISIBLE_DEVICES"] = '3'
+os.environ['NVIDIA_VISIBLE_DEVICES'] = '0'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 # export NVIDIA_VISIBLE_DEVICES=0
 # export CUDA_VISIBLE_DEVICES=0
 # export C10_COMPILE_TIME_MAX_GPUS=3 (?
@@ -152,9 +152,9 @@ KWARGS = dict(
     is_retrain=True,  # whether to load precomputed model or retrain
     is_continue_train=False,
     criterion=NLLLossLNPF, # NPML
-    chckpnt_dirname="/home/qian.hu/neuron_process_waveform/test_1d_q/trained_models/",
+    chckpnt_dirname=output_dir,
     device='cuda',
-    lr=1e-4,
+    lr=1e-5,
     decay_lr=10,
     seed=1314,
     batch_size=1,  # smaller batch because multiple samples
