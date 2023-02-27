@@ -11,7 +11,7 @@ from npf import CNPFLoss
 from utils.ntbks_helpers import add_y_dim
 from utils.train import train_models
 from npf import ConvCNP
-
+import time
 from functools import partial
 import scipy
 import bilby
@@ -38,10 +38,10 @@ def my_inner_product(hf1,hf2,det,flag):
         raise("Wrong flag!")
 
 
-def get_dtdphi_withift_zeropad(h1,h2,det):
+def get_dtdphi_withift_zeropad(h1,h2,det,freq_scale_factor=1,zero_pad_factor=15):
 
     if det is None:
-        duration=9
+        duration=8
         f_lower=20
         sampling_frequency=4096
         ifos = bilby.gw.detector.InterferometerList(['L1'])
@@ -50,10 +50,11 @@ def get_dtdphi_withift_zeropad(h1,h2,det):
         det.sampling_frequency=sampling_frequency
         det.frequency_mask = det.frequency_array>=f_lower
     psd = det.power_spectral_density_array
-    f_array = det.frequency_array
+    f_array = det.frequency_array / freq_scale_factor
     
     X_of_f = h1*h2.conjugate()/psd
-    add_zero = np.zeros(int(63*len(X_of_f)))
+    #add_zero = np.zeros(int(63*len(X_of_f)))
+    add_zero = np.zeros(int(zero_pad_factor*len(X_of_f)))
     X_of_f = np.append(X_of_f,add_zero)
     X_of_t = np.fft.ifft(X_of_f)
     
@@ -81,11 +82,11 @@ def get_dtdphi_withift_zeropad(h1,h2,det):
     return deltat,deltaphi
 
 
-def get_shifted_h2_zeropad(h1,h2,det):
+def get_shifted_h2_zeropad(h1,h2,det,freq_scale_factor=1,zero_pad_factor=15):
     '''
     Return the h2*exp(-i*phase_shift), i.e. h2* exp -i*(2\pi f \Delta t + \Delta \phi)
     '''
-    deltat,deltaphi = get_dtdphi_withift_zeropad(h1,h2,det)
+    deltat,deltaphi = get_dtdphi_withift_zeropad(h1,h2,det,freq_scale_factor,zero_pad_factor)
     f_array = det.frequency_array
     exp_phase = np.exp(-1j*(2*np.pi*f_array*deltat + deltaphi) )
     return h2*exp_phase
@@ -555,6 +556,7 @@ class NPMixWaveformGenerator():
     def __init__(self, model_path,
                 context_waveform_generator1,
                 context_waveform_generator2,
+                context_fraction = 0.3,
                 device='cpu',
                 npmodel_total_mass=40, 
                 npmodel_f_low=20,
@@ -563,6 +565,8 @@ class NPMixWaveformGenerator():
                 npmodel_sampling_frequency = 8192,
                 example_det = None
                 ):
+
+        self.context_fraction = context_fraction
         npmodel_dict = get_trained_gwmodels(model_path,device=device)
         self.npmodel_dict = npmodel_dict
         self.npmodel_total_mass = npmodel_total_mass
@@ -581,9 +585,6 @@ class NPMixWaveformGenerator():
         self.context_f_ref = context_waveform_generator1.waveform_arguments['reference_frequency']
         self.context_frequency_array = context_waveform_generator1.frequency_array
         self.context_frequency_mask = context_waveform_generator1.frequency_array>=self.context_f_low
-        
-        # after mixing
-        self.mixed_frequency_array = np.array(list(zip(self.context_frequency_array, self.context_frequency_array))).flatten()
 
         if example_det is None:
             duration=self.context_duration
@@ -640,28 +641,32 @@ class NPMixWaveformGenerator():
         interpolator = scipy.interpolate.CubicSpline(f_mono_new, h_mono_new)
         new_h = interpolator(new_fs)
         
-        #return new_fs[::-1], new_h[::-1]
-        return new_fs, new_h
+        return new_fs[::-1], new_h[::-1]
+        #return new_fs, new_h
     
     def unresample_mono_fdwaveforms(self, f_mono_resampled, h_mono_resampled, f_mono):
         interpolator = scipy.interpolate.CubicSpline(f_mono_resampled[::-1], h_mono_resampled[::-1])
         h_mono = interpolator(f_mono)
         return h_mono
 
-    
-    def mix_waveforms(self, farray, h1_dict, h2_dict, mode, part, weight):
+
+    def mix_waveforms(self, farray, h1_dict, h2_dict, mode, part, fraction=0.01):
         #length = len(h1_dict['plus'][mask])
         #index1 = np.random.permutation(length)[:int(length*weight)]
         #index2 = np.random.permutation(length)[:length-int(length*weight)]
         #index1 = np.arange(length)[::2]
         #index2 = np.arange(length)[1::2]
         #argsort = np.argsort(np.append(index1, index2))
+
+        l = len(farray)
         
-        ffarray = np.array(list(zip(farray, farray))).flatten()
+        farray_m1to1 = rescale_range(farray, (farray.min(),farray.max()), (-1,1))
+        ctxtindex = np.arange(0,l,int(1/fraction))
+        ffarray = np.array(list(zip(farray_m1to1[ctxtindex], farray_m1to1[ctxtindex]))).flatten()
         if part == 'real':
-            return ffarray, np.real(np.array(list(zip(h1_dict[mode], h2_dict[mode]))).flatten())
+            return ffarray, np.real(np.array(list(zip(h1_dict[mode][ctxtindex], h2_dict[mode][ctxtindex]))).flatten())
         elif part == 'imag':
-            return ffarray, np.imag(np.array(list(zip(h1_dict[mode], h2_dict[mode]))).flatten())
+            return ffarray, np.imag(np.array(list(zip(h1_dict[mode][ctxtindex], h2_dict[mode][ctxtindex]))).flatten())
 
     def frequency_domain_strain(self, parameters):
         mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(
@@ -674,49 +679,61 @@ class NPMixWaveformGenerator():
         #self.context_waveform_generator.waveform_arguments['reference_frequency'] /= mratio
 
         # However, keep in mind that our model learns weaveforms from 40Msun, f_low=20Hz - these two parameters do not span over the whole space. We have to scale them. 
-        self.context_waveform_generator1.waveform_arguments['minimum_frequency'] /= mratio
-        self.context_waveform_generator2.waveform_arguments['minimum_frequency'] /= mratio
-        fmin4inj = self.context_waveform_generator1.waveform_arguments['minimum_frequency']
-        if fmin4inj>self.context_f_low: 
-            logging.warning(f"Mtot={mtot} < Training Mtot {self.npmodel_total_mass}, therefore changing starting frequency to {fmin4inj}Hz, which is higher than given {self.context_f_low}Hz.")
+        self.context_waveform_generator1.waveform_arguments['minimum_frequency'] = self.npmodel_f_low
+        self.context_waveform_generator2.waveform_arguments['minimum_frequency'] = self.npmodel_f_low
 
-        mask = self.context_frequency_array>=fmin4inj
+        if mratio<1 and self.context_f_low<self.npmodel_f_low/mratio: 
+            #logging.warning(f"Mtot={mtot} < Training Mtot {self.npmodel_total_mass}, starting frequency is at least {self.npmodel_f_low/mratio}Hz, which is higher than given {self.context_f_low}Hz. Setting zeros between two frequencies.")
+            print(f"Warning: Mtot={mtot} < Training Mtot {self.npmodel_total_mass}, starting frequency should be at least {self.npmodel_f_low/mratio}Hz, which is higher than given {self.context_f_low}Hz. Setting zeros between two frequencies.")
+
+        mask = self.context_frequency_array>=self.npmodel_f_low
+        mask_output = self.context_frequency_array>=max(self.context_f_low,self.npmodel_f_low/mratio)
         d_l = parameters['luminosity_distance']
         parameters['luminosity_distance'] = 100
+        parameters['chirp_mass'] = parameters['chirp_mass']/mratio
+
+        #print(self.context_waveform_generator1)
+        h_dict_context1 = {}
+        h_dict_context2 = {}
+        #t1=time.time()
         h_dict_context1 = self.context_waveform_generator1.frequency_domain_strain(parameters)
         h_dict_context2 = self.context_waveform_generator2.frequency_domain_strain(parameters)
-        for key, errors in h_dict_context2.items():
+        #t2=time.time()
+        #print(f"t2-t1: {t2-t1}")
+        #print(len(h_dict_context1['plus']))
+        for key in ['plus', 'cross']:
+            #print(len(h_dict_context1[key]))
             h_dict_context2[key] = get_shifted_h2_zeropad(h_dict_context1[key], h_dict_context2[key], self.example_det)
         
         farray0 = self.context_frequency_array[mask]
+
+        h_dict_context1_processed = {}
+        h_dict_context2_processed = {}
         for mode2scale in ['plus','cross']:
             # mask
-            h_dict_context1[mode2scale] = h_dict_context1[mode2scale][mask]
-            h_dict_context2[mode2scale] = h_dict_context2[mode2scale][mask]
-
-            # scale to training mass
-            scaled_context_f, h_dict_context1[mode2scale] = self.scale_waveform(target_mass=self.npmodel_total_mass, base_f=farray0, base_h=h_dict_context1[mode2scale], base_mass=mtot)
-            scaled_context_f, h_dict_context2[mode2scale] = self.scale_waveform(target_mass=self.npmodel_total_mass, base_f=farray0, base_h=h_dict_context2[mode2scale], base_mass=mtot)
+            h_dict_context1_processed[mode2scale] = h_dict_context1[mode2scale][mask]
+            h_dict_context2_processed[mode2scale] = h_dict_context2[mode2scale][mask]
 
             # monochromatize
-            f_mono, h_dict_context1[mode2scale] = self.monochromatize_waveform(scaled_context_f, h_dict_context1[mode2scale], parameters['chirp_mass']/mratio)
-            f_mono, h_dict_context2[mode2scale] = self.monochromatize_waveform(scaled_context_f, h_dict_context2[mode2scale], parameters['chirp_mass']/mratio)
+            f_mono, h_dict_context1_processed[mode2scale] = self.monochromatize_waveform(farray0, h_dict_context1_processed[mode2scale], parameters['chirp_mass'])
+            f_mono, h_dict_context2_processed[mode2scale] = self.monochromatize_waveform(farray0, h_dict_context2_processed[mode2scale], parameters['chirp_mass'])
 
             # resample
-            f_mono_resampled, h1_mono_resampled_real = self.resample_mono_fdwaveforms(f_mono, np.real(h_dict_context1[mode2scale]))
-            f_mono_resampled, h1_mono_resampled_imag = self.resample_mono_fdwaveforms(f_mono, np.imag(h_dict_context1[mode2scale]))
-            h_dict_context1[mode2scale] = h1_mono_resampled_real + h1_mono_resampled_imag*1j
-            f_mono_resampled, h2_mono_resampled_real = self.resample_mono_fdwaveforms(f_mono, np.real(h_dict_context2[mode2scale]))
-            f_mono_resampled, h2_mono_resampled_imag = self.resample_mono_fdwaveforms(f_mono, np.imag(h_dict_context2[mode2scale]))
-            h_dict_context2[mode2scale] = h2_mono_resampled_real + h2_mono_resampled_imag*1j
+            f_mono_resampled, h1_mono_resampled_real = self.resample_mono_fdwaveforms(f_mono, np.real(h_dict_context1_processed[mode2scale]))
+            f_mono_resampled, h1_mono_resampled_imag = self.resample_mono_fdwaveforms(f_mono, np.imag(h_dict_context1_processed[mode2scale]))
+            h_dict_context1_processed[mode2scale] = h1_mono_resampled_real + h1_mono_resampled_imag*1j
+
+            f_mono_resampled, h2_mono_resampled_real = self.resample_mono_fdwaveforms(f_mono, np.real(h_dict_context2_processed[mode2scale]))
+            f_mono_resampled, h2_mono_resampled_imag = self.resample_mono_fdwaveforms(f_mono, np.imag(h_dict_context2_processed[mode2scale]))
+            h_dict_context2_processed[mode2scale] = h2_mono_resampled_real + h2_mono_resampled_imag*1j
             
 
 
         h_dict_context_components={}
-        ff_mono_resampled, h_dict_context_components['plus_real'] = self.mix_waveforms(f_mono_resampled, h_dict_context1, h_dict_context2, 'plus', 'real', 0.5)
-        ff_mono_resampled, h_dict_context_components['plus_imag'] = self.mix_waveforms(f_mono_resampled, h_dict_context1, h_dict_context2, 'plus', 'imag', 0.5)
-        ff_mono_resampled, h_dict_context_components['cross_real'] = self.mix_waveforms(f_mono_resampled, h_dict_context1, h_dict_context2, 'cross', 'real', 0.5)
-        ff_mono_resampled, h_dict_context_components['cross_imag'] = self.mix_waveforms(f_mono_resampled, h_dict_context1, h_dict_context2, 'cross', 'imag', 0.5)
+        ff_mono_resampled, h_dict_context_components['plus_real'] = self.mix_waveforms(f_mono_resampled, h_dict_context1_processed, h_dict_context2_processed, 'plus', 'real', self.context_fraction)
+        ff_mono_resampled, h_dict_context_components['plus_imag'] = self.mix_waveforms(f_mono_resampled, h_dict_context1_processed, h_dict_context2_processed, 'plus', 'imag', self.context_fraction)
+        ff_mono_resampled, h_dict_context_components['cross_real'] = self.mix_waveforms(f_mono_resampled, h_dict_context1_processed, h_dict_context2_processed, 'cross', 'real', self.context_fraction)
+        ff_mono_resampled, h_dict_context_components['cross_imag'] = self.mix_waveforms(f_mono_resampled, h_dict_context1_processed, h_dict_context2_processed, 'cross', 'imag', self.context_fraction)
         
         #h_dict_context_components['plus_real'] = np.zeros(len(ff_mono_resampled))
         #h_dict_context_components['plus_imag'] = np.zeros(len(ff_mono_resampled))
@@ -727,34 +744,29 @@ class NPMixWaveformGenerator():
         std_dict={}
         for label,h_mono_resampled in h_dict_context_components.items():
             model = self.npmodel_dict[label]
+            target_f_mono_resampled = rescale_range(f_mono_resampled, (f_mono_resampled.min(),f_mono_resampled.max()), (-1,1))
             mean_resampled, std_resampled = get_predictions(model,
-                                                torch.from_numpy(ff_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
-                                                torch.from_numpy(h_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
-                                                torch.from_numpy(ff_mono_resampled).unsqueeze(-1).unsqueeze(-1).type(torch.float32), 
-                                                1)
-            #mean_resampled = mean_resampled[::-1]
-            #std_resampled = std_resampled[::-1]
-            #mean_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, mean_resampled, f_mono)
-            #std_mono = self.unresample_mono_fdwaveforms(f_mono_resampled, std_resampled, f_mono)
+                                        torch.from_numpy(ff_mono_resampled).unsqueeze(-1).unsqueeze(0).type(torch.float32), 
+                                        torch.from_numpy(h_mono_resampled).unsqueeze(-1).unsqueeze(0).type(torch.float32), 
+                                        torch.from_numpy(target_f_mono_resampled).unsqueeze(-1).unsqueeze(0).type(torch.float32), 
+                                        1)
 
-            mean_resampled = mean_resampled[::2]
-            std_resampled = std_resampled[::2]
-
-            farray2, mean_scaled = self.unmonochromatize_waveform(f_mono_resampled, mean_resampled, parameters['chirp_mass']/mratio)
-            farray2, std_scaled = self.unmonochromatize_waveform(f_mono_resampled, std_resampled, parameters['chirp_mass']/mratio)
+            farray2, mean_scaled = self.unmonochromatize_waveform(f_mono_resampled, mean_resampled, parameters['chirp_mass'])
+            farray2, std_scaled = self.unmonochromatize_waveform(f_mono_resampled, std_resampled, parameters['chirp_mass'])
 
             # unscale to injection mass
             # farray3 should == farray (?)
             farray3, mean = self.scale_waveform(target_mass=mtot, base_f=farray2, base_h=mean_scaled, base_mass=self.npmodel_total_mass)
             farray3, std = self.scale_waveform(target_mass=mtot, base_f=farray2, base_h=std_scaled, base_mass=self.npmodel_total_mass)
-            #print(farray3)
-            interpolator_mean = scipy.interpolate.CubicSpline(farray3[::-1], mean[::-1])
-            mean_at_freq = interpolator_mean(self.context_frequency_array[mask])
 
-            interpolator_std = scipy.interpolate.CubicSpline(farray3[::-1], std[::-1])
-            std_at_freq = interpolator_std(self.context_frequency_array[mask])
+            interpolator_mean = scipy.interpolate.CubicSpline(farray3, mean)
+            mean_at_freq = interpolator_mean(self.context_frequency_array[mask_output])
 
-            zerolenth = len(np.where(self.context_frequency_array<min(fmin4inj,self.context_f_low))[0])
+            interpolator_std = scipy.interpolate.CubicSpline(farray3, std)
+            std_at_freq = interpolator_std(self.context_frequency_array[mask_output])
+
+            #zerolenth = len(np.where(self.context_frequency_array<min(fmin4inj,self.context_f_low))[0])
+            zerolenth = len(np.where(self.context_frequency_array<max(self.context_f_low,self.npmodel_f_low/mratio))[0])
             zero_paddings = np.zeros(zerolenth)
             
             mean_dict[label] = np.append(zero_paddings, mean_at_freq) * 100 / d_l
@@ -768,9 +780,11 @@ class NPMixWaveformGenerator():
             error_dict[key] = std_dict[f'{key}_real'] + std_dict[f'{key}_imag']*1j
 
         #self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
-        self.context_waveform_generator1.waveform_arguments['minimum_frequency'] *= mratio
-        self.context_waveform_generator2.waveform_arguments['minimum_frequency'] *= mratio
         parameters['luminosity_distance']=d_l
+        parameters['chirp_mass'] *= mratio
+
+        self.context_waveform_generator1.waveform_arguments['minimum_frequency'] = self.context_f_low
+        self.context_waveform_generator2.waveform_arguments['minimum_frequency'] = self.context_f_low
         return h_dict, error_dict
 
 

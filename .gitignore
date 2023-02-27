@@ -67,3 +67,4 @@ train_*.py
 *.bak
 *.npy
 *.sh
+*.h5
