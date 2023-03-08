@@ -6,7 +6,7 @@ os.environ['NVIDIA_VISIBLE_DEVICES'] = '0'
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 # export NVIDIA_VISIBLE_DEVICES=3
 # export CUDA_VISIBLE_DEVICES=3
-# nohup python training_P.py >nohup_R64.out & 
+# nohup python training_AS.py >nohup_AS_R32_ctxt10.out & 
 
 # export C10_COMPILE_TIME_MAX_GPUS=3 (?
 # export CUDA_DEVICE_ORDER=PCI_BUS_ID
@@ -48,16 +48,9 @@ from utils.helpers import count_parameters
 print(torch.cuda.current_device())
 
 root_dir = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-h5filename = root_dir + 'gw_fd_8D_q25a8M40_2N10k_IMREOB_P.h5'
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_P_q25a8M40_2N10k/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0215_2/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0220/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0221_3percent/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0221_5percent/" ###
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0221_10percent/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0228_R32/"
-#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0228_R16/"
-output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0228_R64/"
+h5filename = root_dir + 'gw_fd_q10a99M40_2N10k_IMREOB_AS.h5'
+
+output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0308_R32_ctxt10_AS/"
 
 Ngw = gwutils.get_gwfdh5_nsample(h5filename)
 Ntrain = int(Ngw*0.7)
@@ -114,11 +107,11 @@ get_cntxt_trgt_1d = cntxt_trgt_collate(
     CntxtTrgtGetter(
         #contexts_getter=GetRandomIndcs(a=0.6, b=0.8), targets_getter=GetRandomIndcs(a=0.6, b=0.8), #GetRandomIndcs(a=0.8, b=0.9)
         #contexts_getter=GetRandomIndcs(a=0, b=0.3), targets_getter=get_all_indcs
-        contexts_getter=GetRandomIndcs(a=0.002, b=0.05), targets_getter=get_all_indcs
+        contexts_getter=GetRandomIndcs(a=0.08, b=0.12), targets_getter=get_all_indcs
     )
 )
 
-R_DIM = 64
+R_DIM = 32
 KWARGS = dict(
     r_dim=R_DIM,
     Decoder=discard_ith_arg(  # disregards the target features to be translation equivariant
