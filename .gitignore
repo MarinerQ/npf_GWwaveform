@@ -68,3 +68,4 @@ train_*.py
 *.npy
 *.sh
 *.h5
+*.pickle

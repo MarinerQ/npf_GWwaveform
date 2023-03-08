@@ -248,8 +248,7 @@ def get_gwfdh5_nsample(gwh5file):
         l = len(list(f['waveform_fd'][approx]['plus']['scaled_resampled']))
     return l
 
-def get_trained_gwmodels(path,device):
-    R_DIM = 128
+def get_trained_gwmodels(path,device,R_DIM=128):
     KWARGS = dict(
         r_dim=R_DIM,
         Decoder=discard_ith_arg(  # disregards the target features to be translation equivariant
@@ -489,7 +488,7 @@ class NPWaveformGenerator():
         mratio = mtot/self.npmodel_total_mass
 
         # Changing f_ref is effectively changing inclination and rotating spins, however our training includes all inclinations and spins. Therefore I am NOT going to scale f_ref and commented this out.
-        #self.context_waveform_generator.waveform_arguments['reference_frequency'] /= mratio
+        self.context_waveform_generator.waveform_arguments['reference_frequency'] /= mratio
 
         # However, keep in mind that our model learns weaveforms from 40Msun, f_low=20Hz - these two parameters do not span over the whole space. We have to scale them. 
         self.context_waveform_generator.waveform_arguments['minimum_frequency'] /= mratio
@@ -546,7 +545,7 @@ class NPWaveformGenerator():
             h_dict[key] = mean_dict[f'{key}_real'] + mean_dict[f'{key}_imag']*1j
             error_dict[key] = std_dict[f'{key}_real'] + std_dict[f'{key}_imag']*1j
 
-        #self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
+        self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
         self.context_waveform_generator.waveform_arguments['minimum_frequency'] *= mratio
         parameters['luminosity_distance']=d_l
         return h_dict, error_dict
@@ -558,6 +557,7 @@ class NPMixWaveformGenerator():
                 context_waveform_generator2,
                 context_fraction = 0.3,
                 device='cpu',
+                R_DIM=128,
                 npmodel_total_mass=40, 
                 npmodel_f_low=20,
                 npmodel_f_ref = 50, 
@@ -567,7 +567,8 @@ class NPMixWaveformGenerator():
                 ):
 
         self.context_fraction = context_fraction
-        npmodel_dict = get_trained_gwmodels(model_path,device=device)
+        self.R_DIM = R_DIM
+        npmodel_dict = get_trained_gwmodels(model_path,device=device,R_DIM=R_DIM)
         self.npmodel_dict = npmodel_dict
         self.npmodel_total_mass = npmodel_total_mass
         self.npmodel_f_low = npmodel_f_low
@@ -674,9 +675,8 @@ class NPMixWaveformGenerator():
             parameters['mass_ratio']
         )
         mratio = mtot/self.npmodel_total_mass
-
-        # Changing f_ref is effectively changing inclination and rotating spins, however our training includes all inclinations and spins. Therefore I am NOT going to scale f_ref and commented this out.
-        #self.context_waveform_generator.waveform_arguments['reference_frequency'] /= mratio
+        self.context_waveform_generator1.waveform_arguments['reference_frequency'] *= mratio
+        self.context_waveform_generator2.waveform_arguments['reference_frequency'] *= mratio
 
         # However, keep in mind that our model learns weaveforms from 40Msun, f_low=20Hz - these two parameters do not span over the whole space. We have to scale them. 
         self.context_waveform_generator1.waveform_arguments['minimum_frequency'] = self.npmodel_f_low
@@ -692,19 +692,17 @@ class NPMixWaveformGenerator():
         parameters['luminosity_distance'] = 100
         parameters['chirp_mass'] = parameters['chirp_mass']/mratio
 
-        #print(self.context_waveform_generator1)
         h_dict_context1 = {}
         h_dict_context2 = {}
-        #t1=time.time()
+        t1=time.time()
         h_dict_context1 = self.context_waveform_generator1.frequency_domain_strain(parameters)
         h_dict_context2 = self.context_waveform_generator2.frequency_domain_strain(parameters)
-        #t2=time.time()
-        #print(f"t2-t1: {t2-t1}")
-        #print(len(h_dict_context1['plus']))
+        t2=time.time()
+        print(f'Context waveform generation time cost: {t2-t1}')
         for key in ['plus', 'cross']:
-            #print(len(h_dict_context1[key]))
             h_dict_context2[key] = get_shifted_h2_zeropad(h_dict_context1[key], h_dict_context2[key], self.example_det)
-        
+        t3=time.time()
+        print(f'Context waveform shifting time cost: {t3-t2}')
         farray0 = self.context_frequency_array[mask]
 
         h_dict_context1_processed = {}
@@ -742,6 +740,7 @@ class NPMixWaveformGenerator():
 
         mean_dict={}
         std_dict={}
+        t4=time.time()
         for label,h_mono_resampled in h_dict_context_components.items():
             model = self.npmodel_dict[label]
             target_f_mono_resampled = rescale_range(f_mono_resampled, (f_mono_resampled.min(),f_mono_resampled.max()), (-1,1))
@@ -772,14 +771,16 @@ class NPMixWaveformGenerator():
             mean_dict[label] = np.append(zero_paddings, mean_at_freq) * 100 / d_l
             #mean_dict[label] = mean_resampled
             std_dict[label] = np.append(zero_paddings, std_at_freq) * 100 / d_l
-        
+        t5=time.time()
+        print(f'NP prediction time cost: {t5-t4}')
         h_dict = {}
         error_dict = {}
         for key in ['plus', 'cross']:
             h_dict[key] = mean_dict[f'{key}_real'] + mean_dict[f'{key}_imag']*1j
             error_dict[key] = std_dict[f'{key}_real'] + std_dict[f'{key}_imag']*1j
 
-        #self.context_waveform_generator.waveform_arguments['reference_frequency'] *= mratio
+        self.context_waveform_generator1.waveform_arguments['reference_frequency'] /= mratio
+        self.context_waveform_generator2.waveform_arguments['reference_frequency'] /= mratio
         parameters['luminosity_distance']=d_l
         parameters['chirp_mass'] *= mratio
 
