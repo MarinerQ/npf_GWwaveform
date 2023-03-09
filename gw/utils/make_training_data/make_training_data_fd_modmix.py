@@ -11,7 +11,33 @@ import bilby
 from bilby.gw import utils as gwutils
 from pesummary.gw.conversions import spins as pespin
 from bilby.gw import conversion
+import lal
+import lalsimulation
 
+import os
+os.environ['LAL_DATA_PATH'] = '/home/qian.hu/lalsuite_extra_tempfiles/'
+
+def get_LAL_TDfmin(injection_parameters):
+    extra_cycles = 3
+    extra_time_fraction = 0.1
+    mc = injection_parameters['chirp_mass']
+    q = injection_parameters['mass_ratio']
+    mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(mc,q)
+    m1 = mtot/(1+q)*lal.MSUN_SI
+    m2 = m1*q
+    spin1z = injection_parameters['a_1']*np.cos(injection_parameters['tilt_1'])
+    spin2z = injection_parameters['a_2']*np.cos(injection_parameters['tilt_2'])
+
+    tchirp = lalsimulation.SimInspiralChirpTimeBound(30, m1, m2, spin1z, spin2z)
+    s = lalsimulation.SimInspiralFinalBlackHoleSpinBound(spin1z, spin2z)
+    tmerge = lalsimulation.SimInspiralMergeTimeBound(m1, m2) +\
+            lalsimulation.SimInspiralRingdownTimeBound(m1 + m2, s)
+    textra = extra_cycles / 30
+
+    tchirp = (1.0 + extra_time_fraction) * tchirp + tmerge + textra
+    fstart = lalsimulation.SimInspiralChirpStartFrequencyBound(tchirp, m1, m2)
+
+    return fstart
 
 def my_inner_product(hf1,hf2,det,flag):
     inner_prod_complex = gwutils.noise_weighted_inner_product(
@@ -132,8 +158,9 @@ def make_FDaligned_waveforms(injection_parameters,
     if mode in ['plus', 'cross']:
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
+                fmin_laltd = np.ceil(get_LAL_TDfmin(injection_parameters))
                 waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=f_ref, minimum_frequency=0)  # 0: auto choose (still have bug here)
+                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose (still have bug here)
             else:
                 waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=f_lower)
@@ -164,8 +191,9 @@ def make_FDaligned_waveforms(injection_parameters,
         # h_list = [approx1_plus, approx1_cross, approx2_plus, approx2_cross, ...]
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
+                fmin_laltd = np.ceil(get_LAL_TDfmin(injection_parameters))
                 waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=f_ref, minimum_frequency=0)  # 0: auto choose
+                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose
             else:
                 waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=f_lower)
@@ -313,6 +341,7 @@ def get_inj_paras(parameter_values,
 
 # nohup python make_training_data_fd_modmix.py PHM 40 >nohup_PHM40.out &
 # nohup python make_training_data_fd_modmix.py P 40 >nohup_P40.out &
+# nohup python make_training_data_fd_modmix.py PHMsur 40 >nohup_PHMsur40.out &
 if __name__ == '__main__':
     phy = str(sys.argv[1])
     Mtot = int(sys.argv[2])
@@ -336,7 +365,8 @@ if __name__ == '__main__':
 
 
     iota = generate_random_angle(N, 'cos')
-    fref_list = np.zeros(N)+50.0
+    #fref_list = np.zeros(N)+50.0
+    fref_list = np.zeros(N)+ 6**(-3/2)/np.pi/lal.MRSUN_SI*lal.C_SI/Mtot # = 110 for 40Msun
     phiref_list = np.zeros(N)
     converted_spin = pespin.spin_angles(mass_1,mass_2,iota , spin1x, spin1y, spin1z, spin2x, spin2y,spin2z, fref_list,phiref_list)
     theta_jn = converted_spin[:,0]
@@ -375,6 +405,8 @@ if __name__ == '__main__':
         approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
     elif phy=="PHM":
         approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM']
+    elif phy=="PHMsur":
+        approximant_list = ['IMRPhenomXPHM','NRSur7dq4']
     else:
         raise Exception("Wrong phy!")
     #approximant_list = ['IMRPhenomXPHM','SEOBNRv4PHM','NRSur7dq4']
@@ -438,7 +470,8 @@ if __name__ == '__main__':
             data_dict['source_parameters'][paraname].append(injection_para[paraname])
 
     save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-    h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
+    #h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
+    h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMRSUR_{phy}.h5'
     # 1: 4s, 4096Hz
     # 2: 16s, 4096Hz, //3
     # 3: 32s, 8192Hz, //10
