@@ -15,9 +15,10 @@ import lal
 import lalsimulation
 
 import os
-os.environ['LAL_DATA_PATH'] = '/home/qian.hu/lalsuite_extra_tempfiles/'
+#os.environ['LAL_DATA_PATH'] = '/home/qian.hu/lalsuite_extra_tempfiles/'
+os.environ['LAL_DATA_PATH'] = '/Users/qianhu/Documents/lalsuite-extra-master/data/lalsimulation/'
 
-def get_LAL_TDfmin(injection_parameters):
+def get_LAL_TDfmin(injection_parameters, fmin_wavegen):
     extra_cycles = 3
     extra_time_fraction = 0.1
     mc = injection_parameters['chirp_mass']
@@ -28,16 +29,30 @@ def get_LAL_TDfmin(injection_parameters):
     spin1z = injection_parameters['a_1']*np.cos(injection_parameters['tilt_1'])
     spin2z = injection_parameters['a_2']*np.cos(injection_parameters['tilt_2'])
 
-    tchirp = lalsimulation.SimInspiralChirpTimeBound(30, m1, m2, spin1z, spin2z)
+    tchirp = lalsimulation.SimInspiralChirpTimeBound(fmin_wavegen, m1, m2, spin1z, spin2z)
     s = lalsimulation.SimInspiralFinalBlackHoleSpinBound(spin1z, spin2z)
     tmerge = lalsimulation.SimInspiralMergeTimeBound(m1, m2) +\
             lalsimulation.SimInspiralRingdownTimeBound(m1 + m2, s)
-    textra = extra_cycles / 30
+    textra = extra_cycles / fmin_wavegen
 
     tchirp = (1.0 + extra_time_fraction) * tchirp + tmerge + textra
     fstart = lalsimulation.SimInspiralChirpStartFrequencyBound(tchirp, m1, m2)
 
     return fstart
+
+
+
+def safe_fmin_NRSur7dq4(injection_parameters):
+    mc = injection_parameters['chirp_mass']
+    q = injection_parameters['mass_ratio']
+    mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(mc,q)
+
+    theo_fmin = 20 * (66/mtot)
+    LAL_fmin = get_LAL_TDfmin(injection_parameters, theo_fmin)
+
+    f_diff = theo_fmin - LAL_fmin
+    #print(f"theo_fmin: {theo_fmin}, LAL_fmin: {LAL_fmin}, return {theo_fmin + f_diff}")
+    return theo_fmin + f_diff
 
 def my_inner_product(hf1,hf2,det,flag):
     inner_prod_complex = gwutils.noise_weighted_inner_product(
@@ -158,7 +173,7 @@ def make_FDaligned_waveforms(injection_parameters,
     if mode in ['plus', 'cross']:
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
-                fmin_laltd = np.ceil(get_LAL_TDfmin(injection_parameters))
+                fmin_laltd = np.ceil(safe_fmin_NRSur7dq4(injection_parameters))
                 waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose (still have bug here)
             else:
@@ -191,7 +206,7 @@ def make_FDaligned_waveforms(injection_parameters,
         # h_list = [approx1_plus, approx1_cross, approx2_plus, approx2_cross, ...]
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
-                fmin_laltd = np.ceil(get_LAL_TDfmin(injection_parameters))
+                fmin_laltd = np.ceil(safe_fmin_NRSur7dq4(injection_parameters))
                 waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose
             else:
@@ -346,7 +361,7 @@ if __name__ == '__main__':
     phy = str(sys.argv[1])
     Mtot = int(sys.argv[2])
 
-    N=5000
+    N=5
     #q = np.logspace(np.log10(0.5),0,N)  # q from 0.5 to 1
     q = np.linspace(0.25,1,N)
 
@@ -469,7 +484,8 @@ if __name__ == '__main__':
         for paraname in parameter_name_list:
             data_dict['source_parameters'][paraname].append(injection_para[paraname])
 
-    save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
+    #save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
+    save_folder = '/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/data/'
     #h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
     h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMRSUR_{phy}.h5'
     # 1: 4s, 4096Hz

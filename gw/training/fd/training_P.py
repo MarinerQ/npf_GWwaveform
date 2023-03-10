@@ -27,6 +27,7 @@ N_THREADS = 10
 torch.set_num_threads(N_THREADS)
 
 from gw.utils import gwutils
+from gw.utils import gwdataset
 from npf import CNPFLoss
 from utils.train import train_models
 from functools import partial
@@ -99,9 +100,9 @@ for mode in ['plus', 'cross']:
 #    for part in ['real']:
         train_label = f'{mode}_{part}'
         print(f"Loading {train_label}...")
-        gw_dataset = gwutils.GWDatasetFDMultimodel(h5file=h5filename, indcies=train_index, mode=mode, part=part)
-        gw_test_dataset = gwutils.GWDatasetFDMultimodel(h5file=h5filename, indcies=test_index, mode=mode, part=part)
-        gw_valid_dataset = gwutils.GWDatasetFDMultimodel(h5file=h5filename, indcies=valid_index, mode=mode, part=part)
+        gw_dataset = gwdataset.GWDatasetFDMultimodel(h5file=h5filename, indcies=train_index, mode=mode, part=part)
+        gw_test_dataset = gwdataset.GWDatasetFDMultimodel(h5file=h5filename, indcies=test_index, mode=mode, part=part)
+        gw_valid_dataset = gwdataset.GWDatasetFDMultimodel(h5file=h5filename, indcies=valid_index, mode=mode, part=part)
         
         gw_datasets[train_label] = gw_dataset
         gw_test_datasets[train_label] = gw_test_dataset
