@@ -33,26 +33,36 @@ from npf.utils.datasplit import (
 )
 from utils.data import cntxt_trgt_collate
 
-
+# conda activate myigwn-py39
+# nohup python training_PHM.py >nohup_IMRSUR_R32_ctxt10.out &
 
 
 root_dir = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-h5filename = root_dir + 'gw_fd_8D_q25a8M40_2N10k_IMREOB_PHM.h5'
-output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_PHM_q25a8M40_2N10k/"
+#h5filename = root_dir + 'gw_fd_8D_q25a8M40_2N10k_IMREOB_PHM.h5'
+h5filename = f'{root_dir}gw_fd_8D_q4a99M40_2N10k_IMRSUR_PHMsur.h5'
+#output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_PHM_q25a8M40_2N10k/"
+output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0310_IMRSUR_10ctxt_R32/"
 
 Ngw = gwutils.get_gwfdh5_nsample(h5filename)
 Ntrain = int(Ngw*0.7)
 Ntest = int(Ngw*0.15)
 Nvalid = Ngw - Ntrain - Ntest
 
+try:
+    train_index = np.int64(np.loadtxt(f'{output_dir}trainindex.txt'))
+    test_index = np.int64(np.loadtxt(f'{output_dir}testindex.txt'))
+    valid_index = np.int64(np.loadtxt(f'{output_dir}validindex.txt'))
+    print("Read precomputed indcies.")
+except:
+    print("Precomputed indcies not found. Regenerating and saving")
+    random_index = np.random.permutation(Ngw)
+    train_index = random_index[:Ntrain]
+    test_index = random_index[Ntrain:Ntrain+Ntest]
+    valid_index = random_index[-Nvalid:]
 
-random_index = np.random.permutation(Ngw)
-train_index = random_index[:Ntrain]
-test_index = random_index[Ntrain:Ntrain+Ntest]
-valid_index = random_index[-Nvalid:]
-np.savetxt(f'{output_dir}trainindex.txt', train_index)
-np.savetxt(f'{output_dir}testindex.txt', test_index)
-np.savetxt(f'{output_dir}validindex.txt', valid_index)
+    np.savetxt(f'{output_dir}trainindex.txt', train_index)
+    np.savetxt(f'{output_dir}testindex.txt', test_index)
+    np.savetxt(f'{output_dir}validindex.txt', valid_index)
 
 gw_datasets = {}
 gw_test_datasets = {}
@@ -74,11 +84,11 @@ for mode in ['plus', 'cross']:
 # CONTEXT TARGET SPLIT
 get_cntxt_trgt_1d = cntxt_trgt_collate(
     CntxtTrgtGetter(
-        contexts_getter=GetRandomIndcs(a=0.4, b=0.6), targets_getter=get_all_indcs, #GetRandomIndcs(a=0.8, b=0.9)
+        contexts_getter=GetRandomIndcs(a=0.08, b=0.12), targets_getter=get_all_indcs, 
     )
 )
 
-R_DIM = 128
+R_DIM = 32
 KWARGS = dict(
     r_dim=R_DIM,
     Decoder=discard_ith_arg(  # disregards the target features to be translation equivariant
@@ -118,10 +128,10 @@ KWARGS = dict(
     criterion=CNPFLoss,
     chckpnt_dirname=output_dir,
     device="cuda",
-    lr=5e-5,
+    lr=1e-4,
     decay_lr=10,
-    seed=123,
-    batch_size=2,
+    seed=1999,
+    batch_size=4,
 )
 
 # 1D
@@ -131,7 +141,7 @@ trainers_1d = train_models(
     test_datasets=gw_test_datasets,
     iterator_train__collate_fn=get_cntxt_trgt_1d,
     iterator_valid__collate_fn=get_cntxt_trgt_1d,
-    max_epochs=100,
+    max_epochs=200,
     **KWARGS
 )
 

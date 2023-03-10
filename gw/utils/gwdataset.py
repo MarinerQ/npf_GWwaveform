@@ -81,6 +81,8 @@ class GWDatasetFDMultimodel(Dataset):
                     tempinjdict['tilt_1'] = self.source_parameters['tilt_1'][i]
                     tempinjdict['tilt_2'] = self.source_parameters['tilt_2'][i]
                     self.fmin_NRSur.append(np.ceil(safe_fmin_NRSur7dq4(tempinjdict)))
+                self.maxfmin_NRSur = max(self.fmin_NRSur)
+                self.maxcutofflength = len(np.where(self.frequency_array>=self.maxfmin_NRSur)[0])
 
         
         
@@ -94,14 +96,21 @@ class GWDatasetFDMultimodel(Dataset):
     def __getitem__(self, index):
         f = np.array([])
         h = np.array([])
-        for approx in self.waveform_models:
-            if approx == 'NRSur7dq4':
-                fcut = self.fmin_NRSur[index]
-                fcut = fcut**(-5/3) * 1e3
-                nonzeroindex = np.where(self.frequency_array<fcut)[0]
-                f = np.append(f, self.frequency_array[nonzeroindex])
-                h = np.append(h, self.fdwaveforms[approx][index][nonzeroindex])
-            else:
+        if 'NRSur7dq4' in self.waveform_models:
+            fcut = self.fmin_NRSur[index]
+            fcut = fcut**(-5/3) * 1e3
+            nonzeroindex = np.where(self.frequency_array<fcut)[0]
+            f = np.append(f, self.frequency_array[nonzeroindex])
+            h = np.append(h, self.fdwaveforms['NRSur7dq4'][index][nonzeroindex])
+            needcutlength = self.maxcutofflength - (len(self.frequency_array)-len(nonzeroindex))
+            for approx in self.waveform_models:
+                if approx != 'NRSur7dq4':
+                    index_remain = np.random.permutation(len(self.frequency_array))[needcutlength:]
+                    f = np.append(f, self.frequency_array[index_remain])
+                    h = np.append(h, self.fdwaveforms[approx][index][index_remain])
+
+        else:
+            for approx in self.waveform_models:
                 f = np.append(f, self.frequency_array)
                 h = np.append(h, self.fdwaveforms[approx][index])
 

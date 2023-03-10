@@ -4,153 +4,31 @@ import multiprocessing
 from multiprocessing import Pool
 import sys
 
-import h5py
-import scipy
-
 import bilby
-from bilby.gw import utils as gwutils
 from pesummary.gw.conversions import spins as pespin
 from bilby.gw import conversion
 import lal
 import lalsimulation
 
 import os
-#os.environ['LAL_DATA_PATH'] = '/home/qian.hu/lalsuite_extra_tempfiles/'
-os.environ['LAL_DATA_PATH'] = '/Users/qianhu/Documents/lalsuite-extra-master/data/lalsimulation/'
+os.environ['LAL_DATA_PATH'] = '/home/qian.hu/lalsuite_extra_tempfiles/'
+#os.environ['LAL_DATA_PATH'] = '/Users/qianhu/Documents/lalsuite-extra-master/data/lalsimulation/'
+#try:
+#    os.chdir('/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw')
+#except:
+#    os.chdir('/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/gw')
 
-def get_LAL_TDfmin(injection_parameters, fmin_wavegen):
-    extra_cycles = 3
-    extra_time_fraction = 0.1
-    mc = injection_parameters['chirp_mass']
-    q = injection_parameters['mass_ratio']
-    mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(mc,q)
-    m1 = mtot/(1+q)*lal.MSUN_SI
-    m2 = m1*q
-    spin1z = injection_parameters['a_1']*np.cos(injection_parameters['tilt_1'])
-    spin2z = injection_parameters['a_2']*np.cos(injection_parameters['tilt_2'])
+from cnmdgwutils import (
+    safe_fmin_NRSur7dq4,
+    get_shifted_h2_zeropad,
+    save_dict_to_hdf5,
+    scale_aligned_fdwaveforms,
+    resample_scaled_fdwaveforms,
+    generate_random_spin,
+    generate_random_angle,
+    get_inj_paras
+    )
 
-    tchirp = lalsimulation.SimInspiralChirpTimeBound(fmin_wavegen, m1, m2, spin1z, spin2z)
-    s = lalsimulation.SimInspiralFinalBlackHoleSpinBound(spin1z, spin2z)
-    tmerge = lalsimulation.SimInspiralMergeTimeBound(m1, m2) +\
-            lalsimulation.SimInspiralRingdownTimeBound(m1 + m2, s)
-    textra = extra_cycles / fmin_wavegen
-
-    tchirp = (1.0 + extra_time_fraction) * tchirp + tmerge + textra
-    fstart = lalsimulation.SimInspiralChirpStartFrequencyBound(tchirp, m1, m2)
-
-    return fstart
-
-
-
-def safe_fmin_NRSur7dq4(injection_parameters):
-    mc = injection_parameters['chirp_mass']
-    q = injection_parameters['mass_ratio']
-    mtot = bilby.gw.conversion.chirp_mass_and_mass_ratio_to_total_mass(mc,q)
-
-    theo_fmin = 20 * (66/mtot)
-    LAL_fmin = get_LAL_TDfmin(injection_parameters, theo_fmin)
-
-    f_diff = theo_fmin - LAL_fmin
-    #print(f"theo_fmin: {theo_fmin}, LAL_fmin: {LAL_fmin}, return {theo_fmin + f_diff}")
-    return theo_fmin + f_diff
-
-def my_inner_product(hf1,hf2,det,flag):
-    inner_prod_complex = gwutils.noise_weighted_inner_product(
-                            aa=hf1[det.strain_data.frequency_mask],
-                            bb=hf2[det.strain_data.frequency_mask],
-                            power_spectral_density=det.power_spectral_density_array[det.strain_data.frequency_mask],
-                            duration=det.strain_data.duration)
-
-    #inner_prod_complex = det.inner_product_2(hf1, hf2)
-    if flag == "c":
-        return inner_prod_complex
-    elif flag == "r":
-        return np.real(inner_prod_complex)
-    else:
-        raise("Wrong flag!")
-
-
-def get_dtdphi_withift_zeropad(h1,h2,det):
-
-    psd = det.power_spectral_density_array
-    f_array = det.frequency_array
-    
-    X_of_f = h1*h2.conjugate()/psd
-    add_zero = np.zeros(int(63*len(X_of_f)))
-    X_of_f = np.append(X_of_f,add_zero)
-    X_of_t = np.fft.ifft(X_of_f)
-    
-    timelength = 1/(f_array[1]-f_array[0])
-    t = np.linspace(-timelength/2,timelength/2,len(X_of_t))
-    X_shifted = np.roll(X_of_t,len(X_of_t)//2)
-
-    jmax = np.argmax( abs(X_shifted) )
-    deltat = t[jmax]
-    phase1 = 2*np.pi*f_array*deltat
-    
-    freq_mask = det.strain_data.frequency_mask
-    inner_product = my_inner_product(h1.conjugate(), h2.conjugate()*np.exp(1j*phase1), det, 'c')
-    
-    '''
-    gwutils.noise_weighted_inner_product(
-                    aa=h1.conjugate()[freq_mask],
-                    bb=(h2.conjugate()*np.exp(1j*phase1))[freq_mask],
-                    power_spectral_density=det.power_spectral_density_array[freq_mask],
-                    duration=det.strain_data.duration)'''
-    
-    deltaphi = -np.angle(inner_product)
-    #phase2 = deltaphi
-    
-    return deltat,deltaphi
-
-
-def get_shifted_h2_zeropad(h1,h2,det):
-    '''
-    Return the h2*exp(-i*phase_shift), i.e. h2* exp -i*(2\pi f \Delta t + \Delta \phi)
-    '''
-    deltat,deltaphi = get_dtdphi_withift_zeropad(h1,h2,det)
-    f_array = det.frequency_array
-    exp_phase = np.exp(-1j*(2*np.pi*f_array*deltat + deltaphi) )
-    return h2*exp_phase
-
-
-def save_dict_to_hdf5(dic, filename):
-    """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
-    """
-    with h5py.File(filename, 'w') as h5file:
-        recursively_save_dict_contents_to_group(h5file, '/', dic)
-
-def recursively_save_dict_contents_to_group(h5file, path, dic):
-    """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
-    """
-    for key, item in dic.items():
-        if isinstance(item, (np.ndarray, np.int64, np.float64, str, bytes, list)):
-            h5file[path + key] = item
-        elif isinstance(item, dict):
-            recursively_save_dict_contents_to_group(h5file, path + key + '/', item)
-        else:
-            raise ValueError('Cannot save %s type'%type(item))
-
-def load_dict_from_hdf5(filename):
-    """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
-    """
-    with h5py.File(filename, 'r') as h5file:
-        return recursively_load_dict_contents_from_group(h5file, '/')
-
-def recursively_load_dict_contents_from_group(h5file, path):
-    """
-    https://codereview.stackexchange.com/questions/120802/recursively-save-python-dictionaries-to-hdf5-files-using-h5py
-    """
-    ans = {}
-    for key, item in h5file[path].items():
-        if isinstance(item, h5py._hl.dataset.Dataset):
-            ans[key] = item[()]
-        elif isinstance(item, h5py._hl.group.Group):
-            ans[key] = recursively_load_dict_contents_from_group(h5file, path + key + '/')
-    return ans
 
 
 def make_FDaligned_waveforms(injection_parameters,
@@ -175,7 +53,7 @@ def make_FDaligned_waveforms(injection_parameters,
             if approx=='NRSur7dq4':
                 fmin_laltd = np.ceil(safe_fmin_NRSur7dq4(injection_parameters))
                 waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose (still have bug here)
+                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  
             else:
                 waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=f_lower)
@@ -236,124 +114,6 @@ def make_FDaligned_waveforms(injection_parameters,
         return freq_array, h_masked
 
 
-
-def amp_scaling(f, chirp_mass):
-    '''
-    Eq.4.34 of GW, for 1Mpc. Mc in unit of Msun
-    '''
-    c=299792458
-    G=6.67e-11
-    A=(np.pi)**(-2/3)*np.sqrt(5/24)
-
-    amp = A*c*(G*chirp_mass/c**3)**(5/6) * f**(-7/6)
-    
-    return amp
-
-def freq_scaling(f, chirp_mass):
-    '''
-    Eq.4.37 of GW
-    '''
-    #G=6.67e-11
-    #c=299792458
-    #A = 3/4 * (8*np.pi*G*chirp_mass/c**3)**(-5/3)
-    return f**(-5/3) * 1e3
-    
-    
-def scale_aligned_fdwaveforms(farray, h_list, chirp_mass):
-    amp = amp_scaling(farray, chirp_mass)
-    
-    amp_scaled_h_list = []
-    for h in h_list:
-        amp_scaled_h_list.append(h / amp)
-    
-    scaled_f = freq_scaling(farray, chirp_mass)
-    return scaled_f, amp_scaled_h_list
-
-def unscale_scaled_fdwaveforms(farray_scaled, h_list_scaled, chirp_mass):
-    '''
-    Transform back to original waveforms.
-    '''
-    farray = (farray_scaled/1e3) ** (-3/5)
-    
-    amp = amp_scaling(farray, chirp_mass)
-    
-    h_list_unscaled = []
-    for h in h_list_scaled:
-        h_list_unscaled.append(h*amp)
-    
-    return farray, h_list_unscaled
-
-def resample_scaled_fdwaveforms(farray_scaled, h_list_scaled):
-    farray_scaled_new = farray_scaled[::-1]
-    h_list_scaled_new = []
-    
-    for i,h in enumerate(h_list_scaled):
-        h_list_scaled_new.append(h[::-1])
-    
-    fs_min = min(farray_scaled_new)
-    fs_max = max(farray_scaled_new)
-    
-    fs_rd = 0.1 # do not downsample above 250Hz
-    new_fs1 = np.linspace(fs_min, fs_rd, int(len(farray_scaled_new)*fs_rd/(fs_max-fs_min)) )
-    new_fs2 = np.linspace(fs_rd, fs_max, len(farray_scaled_new)//10)  # downsample at low freq (high fs)
-    #print(f"len fs1: {len(new_fs1)}, len fs2: {len(new_fs2)}")
-    #print(f"samp density fs1: {int(len(new_fs1)/fs_rd)}, len fs2: {int(len(new_fs2)/(fs_max-fs_rd))}")
-    new_fs = np.append(new_fs1,new_fs2[1:])
-    
-    h_list_scaled_resampled = []
-    for h in h_list_scaled_new:
-        interpolator = scipy.interpolate.CubicSpline(farray_scaled_new, h)  #sinc
-        new_h = interpolator(new_fs)
-        h_list_scaled_resampled.append(new_h[::-1])
-    
-    return new_fs[::-1], h_list_scaled_resampled
-
-
-def generate_random_spin(Nsample, a_max=0.99):
-    ''' 
-    a random point in unit sphere
-    (r,theta,phi) is the sphere coordinate
-    '''
-    r = np.random.random(Nsample) * a_max
-    phi = 2*np.pi*np.random.random(Nsample)
-    cos_theta = 2*np.random.random(Nsample)-1.0
-    
-    sin_theta = np.sqrt(1-cos_theta**2)
-    cos_phi = np.cos(phi)
-    sin_phi = np.sin(phi)
-    
-    spin_x = r*sin_theta*cos_phi
-    spin_y = r*sin_theta*sin_phi
-    spin_z = r*cos_theta
-    
-    return spin_x, spin_y, spin_z
-
-
-def generate_random_angle(Nsample, flag, low=0, high=2*np.pi):
-    '''
-    flag='cos' works for iota, whose cosine is uniform in [-1,1]
-    flag='sin' works for dec, whose sine is uniform in [-1,1]
-    flag='flat' works for psi (0-pi), phase (0-2pi), ra (0-2pi)
-    '''
-    if flag=="cos":
-        cos_angle =  np.random.uniform(low=-1, high=1, size=Nsample)
-        random_angle = np.arccos(cos_angle)
-    elif flag=="sin":
-        sindec = np.random.uniform(low=-1, high=1, size=Nsample)
-        random_angle = np.arcsin(sindec)
-    elif flag=="flat":
-        random_angle = np.random.uniform(low=low, high=high, size=Nsample)
-
-    return random_angle
-
-def get_inj_paras(parameter_values,
-                  parameter_names = ['chirp_mass','mass_ratio','a_1','a_2','tilt_1','tilt_2','phi_12','phi_jl',
-                                     'theta_jn','psi','phase','ra','dec','luminosity_distance','geocent_time']):
-    inj_paras = dict()
-    for i, para_name in enumerate(parameter_names):
-        inj_paras[para_name] = parameter_values[i]
-    return inj_paras 
-
 # nohup python make_training_data_fd_modmix.py PHM 40 >nohup_PHM40.out &
 # nohup python make_training_data_fd_modmix.py P 40 >nohup_P40.out &
 # nohup python make_training_data_fd_modmix.py PHMsur 40 >nohup_PHMsur40.out &
@@ -361,7 +121,7 @@ if __name__ == '__main__':
     phy = str(sys.argv[1])
     Mtot = int(sys.argv[2])
 
-    N=5
+    N=5000
     #q = np.logspace(np.log10(0.5),0,N)  # q from 0.5 to 1
     q = np.linspace(0.25,1,N)
 
@@ -375,8 +135,8 @@ if __name__ == '__main__':
     mass_ratio = np.zeros(N) + q
     chirp_mass = conversion.component_masses_to_chirp_mass(mass_1,mass_2)
         
-    spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.8)
-    spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.8)
+    spin1x,spin1y,spin1z = generate_random_spin(N, a_max=0.99)
+    spin2x,spin2y,spin2z = generate_random_spin(N, a_max=0.99)
 
 
     iota = generate_random_angle(N, 'cos')
@@ -484,10 +244,10 @@ if __name__ == '__main__':
         for paraname in parameter_name_list:
             data_dict['source_parameters'][paraname].append(injection_para[paraname])
 
-    #save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
-    save_folder = '/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/data/'
+    save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
+    #save_folder = '/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/data/'
     #h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
-    h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMRSUR_{phy}.h5'
+    h5filename = save_folder + f'gw_fd_8D_q4a99M{Mtot}_2N10k_IMRSUR_{phy}.h5'
     # 1: 4s, 4096Hz
     # 2: 16s, 4096Hz, //3
     # 3: 32s, 8192Hz, //10
