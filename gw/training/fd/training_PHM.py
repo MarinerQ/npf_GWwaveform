@@ -1,5 +1,14 @@
 import logging
 import os
+os.environ['C10_COMPILE_TIME_MAX_GPUS'] = '1'
+os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+os.environ['NVIDIA_VISIBLE_DEVICES'] = '0'
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+# export NVIDIA_VISIBLE_DEVICES=0
+# export CUDA_VISIBLE_DEVICES=0
+
+# export C10_COMPILE_TIME_MAX_GPUS=3 (?
+# export CUDA_DEVICE_ORDER=PCI_BUS_ID
 import warnings
 import sys
 
@@ -34,14 +43,14 @@ from npf.utils.datasplit import (
 from utils.data import cntxt_trgt_collate
 
 # conda activate myigwn-py39
-# nohup python training_PHM.py >nohup_IMRSUR_R32_ctxt10.out &
+# nohup python training_PHM.py >nohup_IMRSUR_R32_ctxt5from0.out &
 
 
 root_dir = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
 #h5filename = root_dir + 'gw_fd_8D_q25a8M40_2N10k_IMREOB_PHM.h5'
 h5filename = f'{root_dir}gw_fd_8D_q4a99M40_2N10k_IMRSUR_PHMsur.h5'
 #output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/FULLFD_IMREOB_PHM_q25a8M40_2N10k/"
-output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0310_IMRSUR_10ctxt_R32/"
+output_dir = "/home/qian.hu/neuron_process_waveform/npf_GWwaveform/gw/trained_models/run0310_IMRSUR_5ctxtfrom0_R32/"
 
 Ngw = gwutils.get_gwfdh5_nsample(h5filename)
 Ntrain = int(Ngw*0.7)
@@ -84,7 +93,7 @@ for mode in ['plus', 'cross']:
 # CONTEXT TARGET SPLIT
 get_cntxt_trgt_1d = cntxt_trgt_collate(
     CntxtTrgtGetter(
-        contexts_getter=GetRandomIndcs(a=0.08, b=0.12), targets_getter=get_all_indcs, 
+        contexts_getter=GetRandomIndcs(a=0.01, b=0.1), targets_getter=get_all_indcs, 
     )
 )
 
