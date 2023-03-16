@@ -82,7 +82,7 @@ class GWDatasetFDMultimodel(Dataset):
                     tempinjdict['tilt_2'] = self.source_parameters['tilt_2'][i]
                     self.fmin_NRSur.append(np.ceil(safe_fmin_NRSur7dq4(tempinjdict)))
                 self.maxfmin_NRSur = max(self.fmin_NRSur)
-                self.maxcutofflength = len(np.where(self.frequency_array>=self.maxfmin_NRSur)[0])
+                self.maxcutofflength = len(np.where( self.frequency_array >= self.maxfmin_NRSur**(-5/3)*1e3 )[0])
 
         
         
