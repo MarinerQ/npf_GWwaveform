@@ -34,7 +34,7 @@ from cnmdgwutils import (
 def make_FDaligned_waveforms(injection_parameters,
         duration, f_lower,sampling_frequency,
         approximant_list=['IMRPhenomPv2','SEOBNRv4P'],
-        mode='plus',f_ref=50):
+        mode='plus',f_ref=50, mode_array=None):
     ''' 
     Waveforms are aligned with the 1st model in approximant_list.
     '''
@@ -52,10 +52,18 @@ def make_FDaligned_waveforms(injection_parameters,
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
                 fmin_laltd = np.ceil(safe_fmin_NRSur7dq4(injection_parameters))
-                waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  
+                if mode_array:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                                reference_frequency=f_ref, minimum_frequency=fmin_laltd,mode_array=mode_array) 
+                else:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                                reference_frequency=f_ref, minimum_frequency=fmin_laltd)  
             else:
-                waveform_arguments = dict(waveform_approximant=approx,
+                if mode_array:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=f_lower,mode_array=mode_array)
+                else:
+                    waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=f_lower)
 
 
@@ -85,10 +93,18 @@ def make_FDaligned_waveforms(injection_parameters,
         for i,approx in enumerate(approximant_list):
             if approx=='NRSur7dq4':
                 fmin_laltd = np.ceil(safe_fmin_NRSur7dq4(injection_parameters))
-                waveform_arguments = dict(waveform_approximant=approx,
-                              reference_frequency=f_ref, minimum_frequency=fmin_laltd)  # 0: auto choose
+                if mode_array:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                                reference_frequency=f_ref, minimum_frequency=fmin_laltd,mode_array=mode_array) 
+                else:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                                reference_frequency=f_ref, minimum_frequency=fmin_laltd)  
             else:
-                waveform_arguments = dict(waveform_approximant=approx,
+                if mode_array:
+                    waveform_arguments = dict(waveform_approximant=approx,
+                              reference_frequency=f_ref, minimum_frequency=f_lower,mode_array=mode_array)
+                else:
+                    waveform_arguments = dict(waveform_approximant=approx,
                               reference_frequency=f_ref, minimum_frequency=f_lower)
 
 
@@ -171,7 +187,7 @@ if __name__ == '__main__':
     for i in range(len(para_list)):
         samples[:,i] = para_list[i] 
 
-
+    mode_array = [[2,2],[2,-2]]
     duration=16*2
     f_lower=20
     sampling_frequency=4096*2
@@ -221,7 +237,7 @@ if __name__ == '__main__':
         
         freq_array, h_list = make_FDaligned_waveforms(injection_para,
             duration, f_lower, sampling_frequency,
-            approximant_list=approximant_list, mode='both')
+            approximant_list=approximant_list, mode='both',mode_array=mode_array)
         freq_array_scaled, h_list_scaled = scale_aligned_fdwaveforms(freq_array, h_list, injection_para['chirp_mass'])
         freq_array_scaled_resampled, h_list_scaled_resampled = resample_scaled_fdwaveforms(freq_array_scaled, h_list_scaled)
         
@@ -247,7 +263,7 @@ if __name__ == '__main__':
     save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
     #save_folder = '/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/data/'
     #h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
-    h5filename = save_folder + f'gw_fd_8D_q4a99M{Mtot}_2N10k_IMRSUR_{phy}.h5'
+    h5filename = save_folder + f'gw_fd_8D_q4a99M{Mtot}_2N10k_IMRSUR_{phy}22.h5'
     # 1: 4s, 4096Hz
     # 2: 16s, 4096Hz, //3
     # 3: 32s, 8192Hz, //10
