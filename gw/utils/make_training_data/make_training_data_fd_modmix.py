@@ -190,7 +190,7 @@ if __name__ == '__main__':
     mode_array = [[2,2],[2,-2]]
     duration=16*2
     f_lower=20
-    sampling_frequency=4096*2
+    sampling_frequency=4096/2
 
     if phy=="P":
         approximant_list = ['IMRPhenomPv2','SEOBNRv4P']
@@ -263,7 +263,7 @@ if __name__ == '__main__':
     save_folder = '/home/qian.hu/neuron_process_waveform/npf_GWwaveform/data/'
     #save_folder = '/Users/qianhu/Documents/Glasgow/research/np_waveform/npf_GWwaveform/data/'
     #h5filename = save_folder + f'gw_fd_8D_q25a8M{Mtot}_2N10k_IMREOB_{phy}.h5'
-    h5filename = save_folder + f'gw_fd_8D_q4a99M{Mtot}_2N10k_IMRSUR_{phy}22.h5'
+    h5filename = save_folder + f'gw_fd_8D_q4a99M{Mtot}_2N10k_IMRSUR_{phy}22_2ksr.h5'
     # 1: 4s, 4096Hz
     # 2: 16s, 4096Hz, //3
     # 3: 32s, 8192Hz, //10

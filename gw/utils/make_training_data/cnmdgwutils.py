@@ -222,11 +222,15 @@ def resample_scaled_fdwaveforms(farray_scaled, h_list_scaled):
     fs_min = min(farray_scaled_new)
     fs_max = max(farray_scaled_new)
     
-    #fs_rd = 0.1 # do not downsample above 250Hz
-    fs_rd = 0.4 # do not downsample above 110Hz (ISCO) for 40 Msun
+    # partly resample
+    fs_rd = 0.1 # do not downsample above 250Hz
+    #fs_rd = 0.4 # do not downsample above 110Hz (ISCO) for 40 Msun
     new_fs1 = np.linspace(fs_min, fs_rd, int(len(farray_scaled_new)*fs_rd/(fs_max-fs_min)) )
-    new_fs2 = np.linspace(fs_rd, fs_max, len(farray_scaled_new)//10)  # downsample at low freq (high fs)
+    new_fs2 = np.linspace(fs_rd, fs_max, len(farray_scaled_new)//3)  # downsample at low freq (high fs)
     new_fs = np.append(new_fs1,new_fs2[1:])
+
+    # globally resample
+    #new_fs = np.linspace(fs_min, fs_max, len(farray_scaled_new)//1)
     
     h_list_scaled_resampled = []
     for h in h_list_scaled_new:
